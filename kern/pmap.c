@@ -106,7 +106,7 @@ boot_alloc(uint32_t n)
 	//
 	// LAB 2: Your code here.
 	
-	if(npages<n){
+	if((npages*PGSIZE) < n){
 		panic("boot_alloc: not enougth memory to allocate\n");
 	}
 	if (n != 0) {
@@ -163,7 +163,7 @@ mem_init(void)
 	// Your code goes here:
 
 	pages = (struct PageInfo *)boot_alloc(npages * sizeof(struct PageInfo));
-	memset(pages, 0x00, PGSIZE*npages);
+	memset(pages, 0x00, npages * sizeof(struct PageInfo));
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
 	// up the list of free physical pages. Once we've done so, all further
