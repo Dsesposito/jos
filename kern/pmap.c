@@ -135,9 +135,6 @@ mem_init(void)
 	// Find out how much memory the machine has (npages & npages_basemem).
 	i386_detect_memory();
 
-	// Remove this line when you're ready to test this function.
-	panic("mem_init: This function is not finished\n");
-
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
 	kern_pgdir = (pde_t *) boot_alloc(PGSIZE);
@@ -170,11 +167,19 @@ mem_init(void)
 	// memory management will go through the page_* functions. In
 	// particular, we can now map memory using boot_map_region
 	// or page_insert
+    cprintf("Starting page init \n");
 	page_init();
 
 	check_page_free_list(1);
-	check_page_alloc();
+    cprintf("Free page list checked. Continuing to page alloc check \n");
+
+    panic("mem_init: This function is not finished\n");
+
+    check_page_alloc();
+    cprintf("Page alloc checked. Continuing to page check \n");
+
 	check_page();
+    cprintf("Page checked. Continuing to set up virtual memory \n");
 
 	//////////////////////////////////////////////////////////////////////
 	// Now we set up virtual memory
@@ -265,12 +270,34 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-	size_t i;
-	for (i = 0; i < npages; i++) {
-		pages[i].pp_ref = 0;
-		pages[i].pp_link = page_free_list;
-		page_free_list = &pages[i];
-	}
+
+    size_t j;
+    physaddr_t firstFreePhysicsAddr = PADDR(boot_alloc(0));
+    physaddr_t kernBasePhysicsAddr = EXTPHYSMEM;
+    for(j = 0 ; j < npages ; j++){
+
+        physaddr_t currAddr = PGSIZE*j;
+
+        //Page 0 is in use
+        if (j == 0) {
+            continue;
+        }
+
+        //Io segment in use.
+        if(currAddr >= IOPHYSMEM && currAddr < EXTPHYSMEM){
+            continue;
+        }
+
+        //Kernel code
+        if(currAddr >= kernBasePhysicsAddr && currAddr < firstFreePhysicsAddr){
+            continue;
+        }
+
+
+        pages[j].pp_ref = 0;
+        pages[j].pp_link = page_free_list;
+        page_free_list = &pages[j];
+    }
 }
 
 //
@@ -335,6 +362,7 @@ page_decref(struct PageInfo *pp)
 // directory more permissive than strictly necessary.
 //
 // Hint 3: look at inc/mmu.h for useful macros that mainipulate page
+// table and page directory entries.
 // table and page directory entries.
 //
 pte_t *
