@@ -368,6 +368,11 @@ page_decref(struct PageInfo *pp)
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
+	assert(pgdir);
+	uintptr_t page_number = PGNUM(va);
+	uintptr_t page_directory_index = PDF(va);
+	uintptr_t page_offset = PGOFF(va);
+	
 	// Fill this function in
 	return NULL;
 }
