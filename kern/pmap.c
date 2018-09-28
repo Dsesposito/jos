@@ -316,7 +316,24 @@ struct PageInfo *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
-	return 0;
+	// if we don't have free memory, then we return NULL.
+	if (!page_free_list)
+		return NULL;
+	
+	struct PageInfo *page_list = page_free_list;
+
+	// Remove from page_free_list.
+	// page_list->pp_link = Null;
+	page_free_list = page_list->pp_link;
+
+	// Fill with zeros.
+	if (alloc_flags & ALLOC_ZERO) {
+		// get the kernel virtual address that maps page_list
+		char *kva = page2kva(page_list);
+		// Fill block of memory with '\0' bytes
+		memset(kva, '\0', PGSIZE);
+	}
+	return page_list;
 }
 
 //
@@ -329,6 +346,11 @@ page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
+	if(pp->pp_ref != 0 || pp->pp_link != NULL){
+		panic("'pp->pp_ref' is nonzero or 'pp->pp_link' != NULL");
+	}
+	pp->pp_link = page_free_list;
+	page_free_list = pp;
 }
 
 //
