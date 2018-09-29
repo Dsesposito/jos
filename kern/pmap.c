@@ -507,8 +507,23 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
-	// Fill this function in
-	return NULL;
+	assert(pgdir);
+
+	// Hint: the TA solution uses pgdir_walk
+	pte_t *page_table_entry = pgdir_walk(pgdir, va, 0);
+
+	// "Return NULL if there is no page mapped at va"
+	if (!page_table_entry || !(*page_table_entry & PTE_P))
+		return NULL;
+	// If pte_store is not zero, then we store in it the address
+	// of the pte for this page
+	if(pte_store)
+		*pte_store = page_table_entry; 
+
+	// Address in page table
+	physaddr_t pa = PTE_ADDR(*page_table_entry);
+	
+	return pa2page(pa);
 }
 
 //
