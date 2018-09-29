@@ -173,8 +173,6 @@ mem_init(void)
 	check_page_free_list(1);
     cprintf("Free page list checked. Continuing to page alloc check \n");
 
-    panic("mem_init: This function is not finished\n");
-
     check_page_alloc();
     cprintf("Page alloc checked. Continuing to page check \n");
 
@@ -508,7 +506,7 @@ page_remove(pde_t *pgdir, void *va)
 	pte_t * pte = pgdir_walk(pgdir,va,0);
 	if(pte != NULL){
         tlb_invalidate(pgdir,va);
-        *pte = NULL;
+        *pte = (uint32_t)NULL;
 	}
 
 }
