@@ -321,8 +321,9 @@ page_alloc(int alloc_flags)
 	struct PageInfo *page_list = page_free_list;
 
 	// Remove from page_free_list.
-	// page_list->pp_link = Null;
 	page_free_list = page_list->pp_link;
+
+	page_list->pp_link = NULL;
 
 	// Fill with zeros.
 	if (alloc_flags & ALLOC_ZERO) {
