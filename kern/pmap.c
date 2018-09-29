@@ -173,8 +173,6 @@ mem_init(void)
 	check_page_free_list(1);
     cprintf("Free page list checked. Continuing to page alloc check \n");
 
-    panic("mem_init: This function is not finished\n");
-
     check_page_alloc();
     cprintf("Page alloc checked. Continuing to page check \n");
 
@@ -316,7 +314,25 @@ struct PageInfo *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
-	return 0;
+	// if we don't have free memory, then we return NULL.
+	if (!page_free_list)
+		return NULL;
+	
+	struct PageInfo *page_list = page_free_list;
+
+	// Remove from page_free_list.
+	page_free_list = page_list->pp_link;
+
+	page_list->pp_link = NULL;
+
+	// Fill with zeros.
+	if (alloc_flags & ALLOC_ZERO) {
+		// get the kernel virtual address that maps page_list
+		char *kva = page2kva(page_list);
+		// Fill block of memory with '\0' bytes
+		memset(kva, '\0', PGSIZE);
+	}
+	return page_list;
 }
 
 //
@@ -329,6 +345,11 @@ page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
+	if(pp->pp_ref != 0 || pp->pp_link != NULL){
+		panic("'pp->pp_ref' is nonzero or 'pp->pp_link' != NULL");
+	}
+	pp->pp_link = page_free_list;
+	page_free_list = pp;
 }
 
 //
@@ -450,7 +471,25 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
-	// Fill this function in
+
+    // Get page table from v.a
+    pte_t * vaPte = pgdir_walk(pgdir,va,1);
+
+    if(vaPte == NULL){
+		return E_NO_MEM;
+    }
+
+    //If pte is not empty, the page must be removed .
+    if((void *)*vaPte != NULL){
+        page_remove(pgdir,va);
+    }
+
+    // Get p.a.
+    physaddr_t pa = page2pa(pp);
+
+    *vaPte = pa | perm;
+
+	// All goes right
 	return 0;
 }
 
@@ -490,7 +529,20 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	// Fill this function in
+	struct PageInfo* pp = page_lookup(pgdir,va,0);
+
+	if(pp == NULL){
+        return;
+	}
+
+    page_decref(pp);
+
+	pte_t * pte = pgdir_walk(pgdir,va,0);
+	if(pte != NULL){
+        tlb_invalidate(pgdir,va);
+        *pte = (uint32_t)NULL;
+	}
+
 }
 
 //

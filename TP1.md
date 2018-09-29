@@ -4,8 +4,8 @@ TP1: Memoria virtual en JOS
 page2pa
 -------
 
-La función page2pa devueve  la dirección fisica de comienzo de una página en dado un PageInfoStruct. El shift que se ejecuta (<<PGSHIFT) es debido a que el tamaño de cada página es de 4KB.
-La deducción de la dirección se realiza calculado la posición en que ocupa la página de interés en la lista pages y dicha diferencia se multiplica por 4KB.
+La función page2pa devuelve  la dirección física de comienzo de una página en dado un PageInfoStruct. El shift que se ejecuta (<<PGSHIFT) es debido a que el tamaño de cada página es de 4KB.
+La deducción de la dirección se realiza calculando la posición que ocupa la página de interés en la lista pages y dicha diferencia se multiplica por 4KB.
 
 ...
 
@@ -92,6 +92,10 @@ mem_init () at kern/pmap.c:144
 
 page_alloc
 ----------
+¿en qué se diferencia page2pa() de page2kva()?
+
+page2pa devuelve la dirección física a la que mapea la página. 
+page2kva devuelve la dirección virtual del kernel a la que mapea la página. 
 
 ...
 
