@@ -368,13 +368,41 @@ page_decref(struct PageInfo *pp)
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
-	assert(pgdir);
-	uintptr_t page_number = PGNUM(va);
-	uintptr_t page_directory_index = PDF(va);
-	uintptr_t page_offset = PGOFF(va);
 	
-	// Fill this function in
-	return NULL;
+	struct PageInfo *page;
+
+	pte_t * page_table;
+
+	assert(pgdir);
+
+	uintptr_t page_directory_index = PDX(va);
+
+	pde_t page_directory_entry = pgdir[page_directory_index];
+
+	/* table is present  ? */
+	if(page_directory_entry & PTE_P){
+		page_table = KADDR(PTE_ADDR(page_directory_entry));
+	}else{ /* create */
+		if(!create){
+			return NULL;
+		}
+		page =  page_alloc(ALLOC_ZERO);
+
+		/*
+		the x86 MMU checks permission bits in both the page directory
+		and the page table
+		New Page flags : Page user , Page Writable, Page Present 
+		*/
+		pgdir[page_directory_index] = page2pa(page) | PTE_U | PTE_W | PTE_P;
+		// the new page's reference count is incremented :
+		page->pp_ref++;
+		// turn a PageInfo * into the physical address
+		page_table = (pte_t *)page2kva(page);
+	}
+	
+	uintptr_t page_table_index = PTX(va);
+	
+	return &page_table[PTX(va)];
 }
 
 //
