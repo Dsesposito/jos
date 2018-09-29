@@ -439,7 +439,25 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
-	// Fill this function in
+
+    // Get page table from v.a
+    pte_t * vaPte = pgdir_walk(pgdir,va,1);
+
+    if(vaPte == NULL){
+		return E_NO_MEM;
+    }
+
+    //If pte is not empty, the page must be removed .
+    if((void *)*vaPte != NULL){
+        page_remove(pgdir,va);
+    }
+
+    // Get p.a.
+    physaddr_t pa = page2pa(pp);
+
+    *vaPte = pa | perm;
+
+	// All goes right
 	return 0;
 }
 
@@ -479,7 +497,20 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	// Fill this function in
+	struct PageInfo* pp = page_lookup(pgdir,va,0);
+
+	if(pp == NULL){
+        return;
+	}
+
+    page_decref(pp);
+
+	pte_t * pte = pgdir_walk(pgdir,va,0);
+	if(pte != NULL){
+        tlb_invalidate(pgdir,va);
+        *pte = NULL;
+	}
+
 }
 
 //
