@@ -463,21 +463,24 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
     // Get page table from v.a
     pte_t * vaPte = pgdir_walk(pgdir,va,1);
 
-    if(vaPte == NULL){
-		return E_NO_MEM;
+    if(!vaPte){
+		return -E_NO_MEM;
     }
 
-    //If pte is not empty, the page must be removed .
-    if((void *)*vaPte != NULL){
+    physaddr_t pa = page2pa(pp);
+
+    //If pte is not present, the page must be removed.
+    if(*vaPte & PTE_P && PTE_ADDR(*vaPte) != pa){
         page_remove(pgdir,va);
     }
 
-    // Get p.a.
-    physaddr_t pa = page2pa(pp);
+    //If the physical address is the same, just change permissions.
+    if(PTE_ADDR(*vaPte) != pa){
+        pp->pp_ref++;
+    }
+    
+    *vaPte = pa | perm | PTE_P;
 
-    *vaPte = pa | perm;
-
-	// All goes right
 	return 0;
 }
 
@@ -517,20 +520,23 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	struct PageInfo* pp = page_lookup(pgdir,va,0);
+    pte_t* pte;
+    //Get physical page reference and pte
+	struct PageInfo* pp = page_lookup(pgdir,va,pte);
 
-	if(pp == NULL){
+	//If pte don't exists do nothing
+	if(!pte || !(*pte & PTE_P)){
         return;
 	}
 
+	//Pp ref decrement
     page_decref(pp);
 
-	pte_t * pte = pgdir_walk(pgdir,va,0);
-	if(pte != NULL){
-        tlb_invalidate(pgdir,va);
-        *pte = (uint32_t)NULL;
-	}
+	//Clear pte
+	*pte = 0;
 
+	//Invalidate cache
+    tlb_invalidate(pgdir,va);
 }
 
 //
