@@ -478,7 +478,7 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
     if(PTE_ADDR(*vaPte) != pa){
         pp->pp_ref++;
     }
-    
+
     *vaPte = pa | perm | PTE_P;
 
 	return 0;
@@ -520,9 +520,9 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-    pte_t* pte;
+    pte_t* pte = 0;
     //Get physical page reference and pte
-	struct PageInfo* pp = page_lookup(pgdir,va,pte);
+	struct PageInfo* pp = page_lookup(pgdir,va,&pte);
 
 	//If pte don't exists do nothing
 	if(!pte || !(*pte & PTE_P)){
