@@ -181,6 +181,12 @@ mem_init(void)
 
 	//////////////////////////////////////////////////////////////////////
 	// Now we set up virtual memory
+	
+	// We add the 3 calls to boot_map_region () to configure the 3 regions:
+	// ** The stack of the kernel in KSTACKTOP.
+	// ** The arrangement pages in UPAGES.
+	// ** The first 256 MiB of physical memory in KERNBASE.
+
 
 	//////////////////////////////////////////////////////////////////////
 	// Map 'pages' read-only by the user at linear address UPAGES
@@ -189,6 +195,8 @@ mem_init(void)
 	//      (ie. perm = PTE_U | PTE_P)
 	//    - pages itself -- kernel RW, user NONE
 	// Your code goes here:
+
+	boot_map_region(kern_pgdir, UPAGES, PTSIZE, PADDR(pages), PTE_U);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -202,6 +210,8 @@ mem_init(void)
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
 
+	boot_map_region(kern_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
+
 	//////////////////////////////////////////////////////////////////////
 	// Map all of physical memory at KERNBASE.
 	// Ie.  the VA range [KERNBASE, 2^32) should map to
@@ -210,6 +220,8 @@ mem_init(void)
 	// we just set up the mapping anyway.
 	// Permissions: kernel RW, user NONE
 	// Your code goes here:
+
+	boot_map_region(kern_pgdir, KERNBASE, -KERNBASE, 0, PTE_W);
 
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
@@ -440,9 +452,18 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
-	// Fill this function in
+	// Size is a multiple of PGSIZE, and va and pa are both page-aligned.
+	// The loop increment by PGSIZE both address (pa and va).
+	 
+	int q;
+	for (q = 0; q < size/PGSIZE; ++q, va += PGSIZE, pa += PGSIZE) {
+		//we use the hint: "the TA solution uses pgdir_walk"
+		pte_t *pte = pgdir_walk(pgdir, (void *) va, 1);	
+		if (!pte) panic("boot_map_region: out of memory!!");
+		// permission bits perm|PTE_P for the entries.
+		*pte = pa | perm | PTE_P;
+	}
 }
-
 //
 // Map the physical page 'pp' at virtual address 'va'.
 // The permissions (the low 12 bits) of the page table entry
@@ -475,21 +496,24 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
     // Get page table from v.a
     pte_t * vaPte = pgdir_walk(pgdir,va,1);
 
-    if(vaPte == NULL){
-		return E_NO_MEM;
+    if(!vaPte){
+		return -E_NO_MEM;
     }
 
-    //If pte is not empty, the page must be removed .
-    if((void *)*vaPte != NULL){
+    physaddr_t pa = page2pa(pp);
+
+    //If pte is not present, the page must be removed.
+    if(*vaPte & PTE_P && PTE_ADDR(*vaPte) != pa){
         page_remove(pgdir,va);
     }
 
-    // Get p.a.
-    physaddr_t pa = page2pa(pp);
+    //If the physical address is the same, just change permissions.
+    if(PTE_ADDR(*vaPte) != pa){
+        pp->pp_ref++;
+    }
 
-    *vaPte = pa | perm;
+    *vaPte = pa | perm | PTE_P;
 
-	// All goes right
 	return 0;
 }
 
@@ -544,20 +568,23 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	struct PageInfo* pp = page_lookup(pgdir,va,0);
+    pte_t* pte = 0;
+    //Get physical page reference and pte
+	struct PageInfo* pp = page_lookup(pgdir,va,&pte);
 
-	if(pp == NULL){
+	//If pte don't exists do nothing
+	if(!pte || !(*pte & PTE_P)){
         return;
 	}
 
+	//Pp ref decrement
     page_decref(pp);
 
-	pte_t * pte = pgdir_walk(pgdir,va,0);
-	if(pte != NULL){
-        tlb_invalidate(pgdir,va);
-        *pte = (uint32_t)NULL;
-	}
+	//Clear pte
+	*pte = 0;
 
+	//Invalidate cache
+    tlb_invalidate(pgdir,va);
 }
 
 //
