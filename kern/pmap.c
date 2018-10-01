@@ -401,8 +401,45 @@ page_decref(struct PageInfo *pp)
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
-	// Fill this function in
-	return NULL;
+	
+	struct PageInfo *page;
+
+	pte_t * page_table;
+
+	assert(pgdir);
+
+	uintptr_t page_directory_index = PDX(va);
+
+	pde_t page_directory_entry = pgdir[page_directory_index];
+
+	/* table is present  ? */
+	if(page_directory_entry & PTE_P){
+		page_table = KADDR(PTE_ADDR(page_directory_entry));
+	}else{ /* create */
+		if(!create){
+			return NULL;
+		}
+		page =  page_alloc(ALLOC_ZERO);
+		
+		if(!page){
+			return NULL;
+		}
+
+		/*
+		the x86 MMU checks permission bits in both the page directory
+		and the page table
+		New Page flags : Page user , Page Writable, Page Present 
+		*/
+		pgdir[page_directory_index] = page2pa(page) | PTE_U | PTE_W | PTE_P;
+		// the new page's reference count is incremented :
+		page->pp_ref++;
+		// turn a PageInfo * into the physical address
+		page_table = (pte_t *)page2kva(page);
+	}
+	
+	uintptr_t page_table_index = PTX(va);
+	
+	return &page_table[PTX(va)];
 }
 
 //
@@ -498,8 +535,23 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
-	// Fill this function in
-	return NULL;
+	assert(pgdir);
+
+	// Hint: the TA solution uses pgdir_walk
+	pte_t *page_table_entry = pgdir_walk(pgdir, va, 0);
+
+	// "Return NULL if there is no page mapped at va"
+	if (!page_table_entry || !(*page_table_entry & PTE_P))
+		return NULL;
+	// If pte_store is not zero, then we store in it the address
+	// of the pte for this page
+	if(pte_store)
+		*pte_store = page_table_entry; 
+
+	// Address in page table
+	physaddr_t pa = PTE_ADDR(*page_table_entry);
+	
+	return pa2page(pa);
 }
 
 //
