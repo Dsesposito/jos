@@ -420,6 +420,10 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 			return NULL;
 		}
 		page =  page_alloc(ALLOC_ZERO);
+		
+		if(!page){
+			return NULL;
+		}
 
 		/*
 		the x86 MMU checks permission bits in both the page directory
