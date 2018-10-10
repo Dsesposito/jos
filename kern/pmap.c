@@ -458,15 +458,42 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 {
 	// Size is a multiple of PGSIZE, and va and pa are both page-aligned.
 	// The loop increment by PGSIZE both address (pa and va).
-	 
-	int q;
-	for (q = 0; q < size/PGSIZE; ++q, va += PGSIZE, pa += PGSIZE) {
-		//we use the hint: "the TA solution uses pgdir_walk"
-		pte_t *pte = pgdir_walk(pgdir, (void *) va, 1);	
-		if (!pte) panic("boot_map_region: out of memory!!");
-		// permission bits perm|PTE_P for the entries.
-		*pte = pa | perm | PTE_P;
-	}
+	#ifndef TP1_PSE
+		int q;
+		for (q = 0; q < size/PGSIZE; ++q, va += PGSIZE, pa += PGSIZE) {
+			//we use the hint: "the TA solution uses pgdir_walk"
+			pte_t *pte = pgdir_walk(pgdir, (void *) va, 1);	
+			if (!pte) panic("boot_map_region: out of memory!!");
+			// permission bits perm|PTE_P for the entries.
+			*pte = pa | perm | PTE_P;
+		}
+	#else
+    	// Nueva implementación.
+		size_t size_q = 0;
+		while(size_q < size){
+			if (va % PTSIZE == 0 && size_q + PTSIZE <= size){
+				// alineada a 4 MiB --> 2 a la 22 bits
+				// Verifico que al menos queden 4 mib para mappear
+				pde_t* pde = &pgdir[PDX(va)];
+				if (!pde) panic("boot_map_region: out of memory!!");
+				// agregamos la page directory entry con PTE_PS.
+				*pde = pa | PTE_P | perm | PTE_PS;
+				size_q += PTSIZE;
+				va += PTSIZE;
+				pa += PTSIZE;
+				
+			}
+			else{
+				pte_t *pte = pgdir_walk(pgdir, (void *) va, 1);	
+				if (!pte) panic("boot_map_region: out of memory!!");
+				// permission bits perm|PTE_P for the entries.
+				*pte = pa | perm | PTE_P;
+				size_q += PGSIZE;
+				va += PGSIZE;
+				pa += PGSIZE;	
+			}
+		}
+	#endif
 }
 //
 // Map the physical page 'pp' at virtual address 'va'.
@@ -761,13 +788,12 @@ check_kern_pgdir(void)
 	pde_t *pgdir;
 
 	pgdir = kern_pgdir;
-
 	// check pages array
 	n = ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE);
-	for (i = 0; i < n; i += PGSIZE)
+	for (i = 0; i < n; i += PGSIZE){
 		assert(check_va2pa(pgdir, UPAGES + i) == PADDR(pages) + i);
-
-
+	}
+	
 	// check phys mem
 	for (i = 0; i < npages * PGSIZE; i += PGSIZE)
 		assert(check_va2pa(pgdir, KERNBASE + i) == i);
