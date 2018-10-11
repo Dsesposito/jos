@@ -17,3 +17,4 @@
 /cmake-build-debug
 /.idea
 CMakeLists.txt
+/__pycache__/gradelib.cpython-35.pyc
