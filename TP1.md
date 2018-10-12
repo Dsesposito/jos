@@ -98,5 +98,12 @@ page2pa devuelve la dirección física a la que mapea la página.
 page2kva devuelve la dirección virtual del kernel a la que mapea la página. 
 
 ...
+map_region_large
+----------
 
+Responder: ¿cuánta memoria se ahorró de este modo? ¿Es una cantidad fija, o depende de la memoria física de la computadora?
+
+El espacio que se ahorra es por cada page table que no usamos. Ocupan 1024 bytes y eso es lo que se ahorra. 
+En el código, uno de las llamadas a boot_map_region genera 64 large pages, por lo tanto lo que ahorramos son 64*1024 bytes = 64 kB. 
+Es un ahorro que se puede considerar despreciable. Además, no depende de la cantidad de memoria física ya que siempre se mapea al máximo de memoria (4 gB).
 
