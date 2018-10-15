@@ -332,11 +332,62 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
+	struct Elf *elf = (struct Elf *) binary;
+
+	if(elf->e_magic != ELF_MAGIC){
+		panic("Invalid elf binary");
+	}
+
+	//First program header
+	struct Proghdr *ph = (struct Proghdr *) ((uint8_t *) elf + elf->e_phoff);
+
+	//Last program header
+	struct Proghdr *phe = ph + elf->e_phnum;
+
+	//Change to user pgdir
+	lcr3(PADDR(e->env_pgdir));
+
+	/* Help
+	 * ph->p_va - Virtual address where the segment must be loaded.
+	 * ph->p_memsz - Size in bytes of the segment in memory.
+	 * ph->p_filesz - Size in bytes of the segment in the file image.
+	 * The segment bytes starts at elf + ph->offset and ends at elf + ph->offset + ph->p_filsesz
+ 	*/
+
+	for(;ph < phe ; ph++){
+
+		//Verify if the segment must be loaded
+		if(ph->p_type != ELF_PROG_LOAD){
+			continue;
+		}
+
+		if (ph->p_filesz > ph->p_memsz){
+			panic("Size in file must be less or equal than in memory size");
+		}
+
+		//Memory alloc
+		region_alloc(e,(void *)ph->p_va,ph->p_memsz);
+
+		//Copy segment to memory
+		void * segStarts = (void *) ((uint8_t *)elf + ph->p_offset);
+		memcpy((void *)ph->p_va,segStarts,ph->p_filesz);
+
+		//Fill with zeros the rest
+		void * zerosStarts = (void *)(ph->p_va + ph->p_filesz);
+		memset(zerosStarts, 0, ph->p_memsz - ph->p_filesz);
+	}
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
 
 	// LAB 3: Your code here.
+	region_alloc(e,(void *)USTACKTOP - PGSIZE,PGSIZE);
+
+	// Set env entry point
+	e->env_tf.tf_eip = elf->e_entry;
+
+	//Return to kern pgdir
+	lcr3(PADDR(kern_pgdir));
 }
 
 //
