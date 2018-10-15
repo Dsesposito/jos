@@ -401,6 +401,19 @@ void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
+	struct Env * newEnv;
+
+	//Alloc for the new env
+	int errcode = env_alloc(&newEnv,0);
+	if(errcode < 0){
+        panic("Error allocating env: %e",errcode);
+	}
+
+	//Load icode into user memory
+	load_icode(newEnv,binary);
+
+	//Set env type
+	newEnv->env_type = type;
 }
 
 //
