@@ -547,6 +547,21 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-
-	panic("env_run not yet implemented");
+	/*
+	//  If this is a context switch (a new environment is running)
+	 */
+    if (curenv && (curenv->env_status == ENV_RUNNING)){
+		/** ENV_RUNNABLE if it is ENV_RUNNING **/ 
+		curenv->env_status = ENV_RUNNABLE;
+	}
+	// Set 'curenv' to the new environment
+	curenv = e;
+	// Set its status to ENV_RUNNING
+	curenv->env_status = ENV_RUNNING;
+	 // Update its 'env_runs' counter
+	curenv->env_runs++;
+	// Use lcr3() to switch to its address space
+	lcr3(PADDR(curenv->env_pgdir));
+	 // Use env_pop_tf() to restore the environment's registers
+	 env_pop_tf(&(curenv->env_tf));
 }
