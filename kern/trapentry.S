@@ -52,20 +52,16 @@ TRAPHANDLER_NOEC(divzero, T_DIVIDE);
 /*
  * Lab 3: Your code here for _alltraps
  */
-.text
-.globl _alltraps
+.global _alltraps
 _alltraps:
+	
 	pushl %ds
 	pushl %es
 	pushal
+
 	movl $GD_KD, %eax
 	movw %ax, %ds
 	movw %ax, %es
-	// disable FL_IF in %eflags, i.e. disable interrupts
-	pushfl
-	popl %eax
-	movl $FL_IF, %ebx
-	notl %ebx
-	andl %ebx, %eax
-	pushl %esp /* struct Trapframe * as argument */
+
+	pushl %esp
 	call trap
