@@ -59,6 +59,7 @@ trapname(int trapno)
 
 void trap_divzero();
 void trap_pagefault();
+void trap_generalfault();
 void trap_syscall();
 void trap_breakpoint();
 void
@@ -68,7 +69,8 @@ trap_init(void)
 
 	// LAB 3: Your code here.
 	SETGATE(idt[T_DIVIDE], 1, GD_KT, trap_divzero, 0);
-	SETGATE(idt[T_GPFLT], 1, GD_KT, trap_pagefault, 0); 
+	SETGATE(idt[T_GPFLT], 1, GD_KT, trap_generalfault, 0);
+	SETGATE(idt[T_PGFLT], 1, GD_KT, trap_pagefault, 0);
 	SETGATE(idt[T_BRKPT], 1, GD_KT, trap_breakpoint, 3);
 	SETGATE(idt[T_SYSCALL], 1, GD_KT, trap_syscall, 3);
 	

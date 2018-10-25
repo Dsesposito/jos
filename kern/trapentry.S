@@ -48,7 +48,8 @@
 .text
 TRAPHANDLER_NOEC(trap_divzero, T_DIVIDE);
 TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
-TRAPHANDLER(trap_pagefault, T_GPFLT);
+TRAPHANDLER(trap_generalfault, T_GPFLT);
+TRAPHANDLER(trap_pagefault, T_PGFLT);
 TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
 
 /*
