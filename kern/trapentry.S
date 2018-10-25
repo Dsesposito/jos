@@ -47,7 +47,9 @@
 
 .text
 TRAPHANDLER_NOEC(trap_divzero, T_DIVIDE);
-TRAPHANDLER(trap_softinit, T_GPFLT);
+TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
+TRAPHANDLER(trap_pagefault, T_GPFLT);
+TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
 
 /*
  * Lab 3: Your code here for _alltraps
