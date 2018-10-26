@@ -294,8 +294,7 @@ region_alloc(struct Env *e, void *va, size_t len)
 	uintptr_t addr_end = ROUNDUP((uintptr_t) va + len, PGSIZE);
 	while (addr_start < addr_end) {
 		struct PageInfo *page = page_alloc(0);
-		if (page ==
-		    NULL) { /* panic attack !!! : not enought memory !! */
+		if (page == NULL) { /* panic attack !!! : not enought memory !! */
 			panic("region_alloc: not enough memory for page_alloc");
 		}
 		page_insert(e->env_pgdir,
@@ -381,7 +380,7 @@ load_icode(struct Env *e, uint8_t *binary)
 	 * ph->p_filesz - Size in bytes of the segment in the file image.
 	 * The segment bytes starts at elf + ph->offset and ends at elf +
 	 * ph->offset + ph->p_filsesz
-	*/
+	 */
 
 	for (; ph < phe; ph++) {
 		// Verify if the segment must be loaded
