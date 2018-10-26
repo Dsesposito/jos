@@ -575,6 +575,27 @@ aviso: A handler for the OS ABI "GNU/Linux" is not built into this configuration
 Ocurre una excepción y finalizó.
 
 
+kern_idt
+---------
+
+**PREGUNTA:**  
+¿Cómo decidir si usar TRAPHANDLER o TRAPHANDLER_NOEC? ¿Qué pasaría si se usara solamente la primera?
+**RESPUESTA:**
+La diferencia es que la macro TRAPHANDLER_NOEC, se utiliza para los casos en los cuales la cpu no pushea un código de error. Si se usará siempre la primera, el trap frame quedaría distinto para aquellas traps en las cuales el cpu no pushea un código de error.
+
+**PREGUNTA:**  
+Qué cambia, en la invocación de handlers, el segundo parámetro (istrap) de la macro SETGATE? ¿Por qué se elegiría un comportamiento u otro durante un syscall?
+**RESPUESTA:**
+La diferencia esta en que en una interrupción se debe volver a la misma linea de código en la que estaba el cpu antes de que ocurriera la excepción. Para una trap, tiene que pasar a la siguiente.
+
+
+**PREGUNTA:**  
+Leer user/softint.c y ejecutarlo con make run-softint-nox. ¿Qué excepción se genera? Si hay diferencias con la que invoca el programa… ¿por qué mecanismo ocurre eso, y por qué razones?
+**RESPUESTA:**
+
+
+...
+
 user_evilhello
 --------------
 
