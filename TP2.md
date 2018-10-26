@@ -578,23 +578,46 @@ Ocurre una excepción y finalizó.
 kern_idt
 ---------
 
-**PREGUNTA:**  
-¿Cómo decidir si usar TRAPHANDLER o TRAPHANDLER_NOEC? ¿Qué pasaría si se usara solamente la primera?
-**RESPUESTA:**
-La diferencia es que la macro TRAPHANDLER_NOEC, se utiliza para los casos en los cuales la cpu no pushea un código de error. Si se usará siempre la primera, el trap frame quedaría distinto para aquellas traps en las cuales el cpu no pushea un código de error.
+**PREGUNTA:** 
 
-**PREGUNTA:**  
-Qué cambia, en la invocación de handlers, el segundo parámetro (istrap) de la macro SETGATE? ¿Por qué se elegiría un comportamiento u otro durante un syscall?
+¿Cómo decidir si usar TRAPHANDLER o TRAPHANDLER_NOEC? ¿Qué pasaría si se usara solamente la primera?
+
 **RESPUESTA:**
+
+La diferencia es que la macro TRAPHANDLER_NOEC, se utiliza para los casos en los cuales la cpu no pushea un código de error. Si se usará siempre la primera, el trap frame quedaría distinto para aquellos traps en las cuales el cpu no pushea un código de error.
+Usamos TRAPHANDLER_NOEC para las interrupciones o excepciones.
+
+**PREGUNTA:**
+
+Qué cambia, en la invocación de handlers, el segundo parámetro (istrap) de la macro SETGATE? ¿Por qué se elegiría un comportamiento u otro durante un syscall?
+
+**RESPUESTA:**
+
 La diferencia esta en que en una interrupción se debe volver a la misma linea de código en la que estaba el cpu antes de que ocurriera la excepción. Para una trap, tiene que pasar a la siguiente.
 
 
-**PREGUNTA:**  
+**PREGUNTA:** 
+
 Leer user/softint.c y ejecutarlo con make run-softint-nox. ¿Qué excepción se genera? Si hay diferencias con la que invoca el programa… ¿por qué mecanismo ocurre eso, y por qué razones?
+
 **RESPUESTA:**
 
+El programa de usuario user/softint.c invoca la excepción 14 correspondiente a la de page fault.
 
-...
+Al ejecutar el programa con el comando make run-softint-nox observamos la siguiente salida:
+
+  edx  0x00000000
+  ecx  0x00000000
+  eax  0x00000000
+  es   0x----0023
+  ds   0x----0023
+  trap 0x0000000d General Protection
+  err  0x00000072
+  eip  0x00800036
+  cs   0x----001b
+  flag 0x00000082
+
+Es decir, la excepción lanzada es diferente a la que el usuario a través del programa intenta ejecutar. Esa excepción, la de  "General Protection" corresponde a una violación de segmento. Es totalmente coherente que pase esto porque el kernel no debe permitir que el usuario invoque una excepción a elección. El mecanismo utilizado por el procesador para controlar estas situaciones es a través de los campos DPL (indica el nivel de privilegio del segmento) y CPL (indica el nivel de privilegio del procedimiento).
 
 user_evilhello
 --------------
