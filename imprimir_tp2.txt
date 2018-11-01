@@ -1,0 +1,3358 @@
+diff --git a/.clang-files b/.clang-files
+index 6bdb3dc..7922172 100755
+--- a/.clang-files
++++ b/.clang-files
+@@ -1,6 +1,2 @@
+-kern/env.c
+ kern/kdebug.c
+ kern/pmap.c
+-kern/syscall.c
+-kern/trap.c
+-lib/libmain.c
+diff --git a/GNUmakefile b/GNUmakefile
+index 6a9e18a..6dda72e 100755
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -121,7 +121,7 @@ all:
+ 	   $(OBJDIR)/user/%.o
+ 
+ KERN_CFLAGS := $(CFLAGS) -DJOS_KERNEL -gstabs
+-USER_CFLAGS := $(CFLAGS) -DJOS_USER -ggdb3
++USER_CFLAGS := $(CFLAGS) -DJOS_USER -gstabs
+ 
+ # Update .vars.X if variable X has changed since the last make run.
+ #
+@@ -137,8 +137,6 @@ $(OBJDIR)/.vars.%: FORCE
+ # Include Makefrags for subdirectories
+ include boot/Makefrag
+ include kern/Makefrag
+-include lib/Makefrag
+-include user/Makefrag
+ 
+ 
+ QEMUOPTS = -drive file=$(OBJDIR)/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio -gdb tcp:$(GDBSERV)
+@@ -305,22 +303,6 @@ myapi.key:
+ #handin-prep:
+ #	@./handin-prep
+ 
+-# For test runs
+-
+-prep-%:
+-	$(V)$(MAKE) "INIT_CFLAGS=${INIT_CFLAGS} -DTEST=`case $* in *_*) echo $*;; *) echo user_$*;; esac`" $(IMAGES)
+-
+-run-%-nox-gdb: prep-%
+-	$(QEMU) -nographic $(QEMUOPTS) -S
+-
+-run-%-gdb: prep-%
+-	$(QEMU) $(QEMUOPTS) -S
+-
+-run-%-nox: prep-%
+-	$(QEMU) -nographic $(QEMUOPTS)
+-
+-run-%: prep-%
+-	$(QEMU) $(QEMUOPTS)
+ 
+ # This magic automatically generates makefile dependencies
+ # for header files included from C source files we compile,
+diff --git a/TP2.md b/TP2.md
+deleted file mode 100644
+index ed7536d..0000000
+--- a/TP2.md
++++ /dev/null
+@@ -1,799 +0,0 @@
+-TP2: Procesos de usuario
+-========================
+-
+-env_alloc
+----------
+-
+-Analizamos la siguiente porción de código:
+-
+-<code>
+-    generation = (e->env_id + (1 << ENVGENSHIFT)) & ~(NENV - 1);
+-
+-    if (generation <= 0) // Don't create a negative env_id.
+-
+-        generation = 1 << ENVGENSHIFT;
+-
+-    e->env_id = generation | (e - envs);
+-
+-</code>
+-
+-ENVGENSHIFT = 12. Es un valor fijo.
+-NENV también es un valor fijo: 1024
+-
+-para los primeros 5 ocurre lo siguiente:
+-
+-"e" es un struct que hace referencia a un environment sin utilizar por lo tanto e->env_id vale 0 (así se define en env_init()).
+-Generation = (0 + (4096)) & ~(1023) = 4096 (1000 en hexadecimal).
+-Para el primer environment e y envs coinciden y el resultado (e-envs) es 0.
+-
+-Finalmente e->env_id = 4096 | 0 = 4096. (0x00001000 en hexa)
+-Para el segundo environment, generation sigue valiendo 4096 porque es fijo (vendría a ser una especie de offset).
+-
+-Pero en este caso (e-envs) vale 1 porque e apunta a la segunda posición del array de environments (el primero que encuentra libre).
+-Finalmente e->env_id = 4096 | 1 = 4097. (0x00001001 en hexa)
+-Con los otros 3 ocurre lo mismo.
+-
+-**PREGUNTA:**
+-¿Qué identificadores se asignan a los primeros 5 procesos creados? (Usar base hexadecimal.)
+-
+-**RESPUESTA:**
+-Se asignan los siguientes 5 identificadores:
+-0x00001000
+-0x00001001
+-0x00001002
+-0x00001003
+-0x00001004
+-
+-La segunda pregunta propone un escenario donde ya se utilizaron todos los environments disponibles, con lo cual se destruyen procesos y se reutilizan los environments asociados.
+-
+-En estos casos ocurre que:
+-
+-"e" es un struct que hace referencia a un environment ya utilizado por lo tanto e->env_id NO vale 0.
+-
+-el environment envs[630] tendrá un e→env_id = 4096 + 630 = 4726 (0x00001276 en hexa)
+-
+-En este caso, generation ya no vale 4096:
+-Generation = (4726 + (4096)) & ~(1023) = 8192 (2000 en hexadecimal).
+-e → env_id = 8192 | 630 = 8822. (0x00002276 en hexa)
+-
+-Con los siguientes 5 ocurre lo mismo:
+-Generation = (8822 + (4096)) & ~(1023) = 12288 (3000 en hexadecimal).
+-e → env_id = 12288 | 630 = 12918. (0x00003276 en hexa)
+-
+-Generation = (12918 + (4096)) & ~(1023) = 16384 (4000 en hexadecimal).
+-e → env_id = 16384 | 630 = 17014. (0x00004276 en hexa)
+-
+-Generation = (17014 + (4096)) & ~(1023) = 20480 (5000 en hexadecimal).
+-e → env_id = 20480 | 630 = 21110. (0x00005276 en hexa)
+-
+-Generation = (21110 + (4096)) & ~(1023) = 24576 (6000 en hexadecimal).
+-e → env_id = 24576 | 630 = 25206. (0x00006276 en hexa)
+-
+-Entonces:
+-
+-**PREGUNTA:**
+-Supongamos que al arrancar el kernel se lanzan NENV proceso a ejecución. A continuación se destruye el proceso asociado a envs[630] y se lanza un proceso que cada segundo muere y se vuelve a lanzar. ¿Qué identificadores tendrá este proceso en sus sus primeras cinco ejecuciones?
+-
+-**RESPUESTA:**
+-0x00002276
+-0x00003276
+-0x00004276
+-0x00005276
+-0x00006276
+-
+-env_init_percpu
+----------------
+-
+-**PREGUNTA:**
+-¿Cuántos bytes escribe la función lgdt, y dónde?
+-¿Qué representan esos bytes?
+-
+-**RESPUESTA:**
+-Escribe 6 bytes en el registro “global descriptor table” (GDT). Dichos bytes representan  la ubicación que contiene la dirección base (una dirección linear) y el límite (tamaño de la tabla en bytes) del GDT.
+-El registro es de 48 bits: en los 32 más significativos se encuentra la ubicación. En los restantes 16 (menos significativos) contienen el límite de la tabla.
+-
+-env_pop_tf
+-----------
+-
+-Para responder estas preguntas hay que saber que el environment guarda el estado en una estructura llamada trapframe. La estructura la podemos observar en el archivo trap.h de la carpeta inc:
+-
+-<code>
+-struct Trapframe {
+-   struct PushRegs tf_regs;
+-    uint16_t tf_es;
+-    uint16_t tf_padding1;
+-    uint16_t tf_ds;
+-    uint16_t tf_padding2;
+-    uint32_t tf_trapno;
+-    /* below here defined by x86 hardware */
+-    uint32_t tf_err;
+-    uintptr_t tf_eip;
+-    uint16_t tf_cs;
+-    uint16_t tf_padding3;
+-    uint32_t tf_eflags;
+-    /* below here only when crossing rings, such as from user to kernel */
+-    uintptr_t tf_esp;
+-    uint16_t tf_ss;
+-    uint16_t tf_padding4;
+-} \__attribute__((packed));
+-</code>
+-
+-     CPU->TSS--->    +--------------------+
+-                     |        %ss         | \ Solo presente ante
+-                     |        %esp        | / cambios de ring (de privilegios).
+-                     |       EFLAGS       |
+-                     |        %cs         |
+-                     |        %eip        |
+-                     |       tf_err       |
+-                     |       tf_trapno    |
+-                     |        %ds         |
+-                     |        %es         |
+-                     |        %eax        |
+-                     |         ...        |
+-                     |        %edi        |
+-                     +--------------------+     tf <------- %esp
+-
+-**PREGUNTA:**
+-¿Qué hay en (%esp) tras el primer movl de la función?
+-
+-**RESPUESTA:**
+-Hay un puntero al trapframe.
+-
+-**PREGUNTA:**
+-¿Qué hay en (%esp) justo antes de la instrucción iret? ¿Y en 8(%esp)?
+-
+-**RESPUESTA:**
+-El popall hace un pop desde el stack sobre los registros de propósito general. 
+-Luego hace pop de “es” y “ds”. Los siguientes registros son los de trapno y error code, pero los saltea directamente con la instrucción: "\taddl $0x8,%%esp\n" (esto lo menciona como un comentario).
+-Entonces, en %esp se encuentra EIP.
+-En 8(%esp) se encuentra CS.
+-
+-**PREGUNTA:**  
+-¿Cómo puede determinar la CPU si hay un cambio de ring (nivel de privilegio)?
+-
+-**RESPUESTA:**
+-Cuando hay un cambio de privilegio IRET hace pop del stack pointer y de SS (además de los que normalmente hace: EIP, CS y EFLAGS).  Si ESP y SS no están presentes es porque no hubo un cambio de ring.
+-El CPU puede saberlo mediante los valores RPL (Requested Privilege Level) y CPL (Current Privilege Level).
+-Luego de realizar todo esto el CPU resume la ejecución con el nuevo EIP y CS.
+-...
+-
+-gdb_hello
+----------
+-
+-* consola1: make run-hello-nox-gdb
+-
+-* consola2: make gdb
+-
+-* (gdb) b env.c:521
+-Punto de interrupción 1 at 0xf0102fe1: file kern/env.c, line 521.
+-
+-* (gdb) c
+-Continuando.
+-Se asume que la arquitectura objetivo es i386
+-=> 0xf0102fe1 <env_pop_tf>:	push   %ebp
+-
+-Breakpoint 1, env_pop_tf (tf=0xf01c1000) at kern/env.c:522
+-522	{
+-
+-* (qemu) info registers
+-
+-EAX=003bc000 EBX=00010094 ECX=f03bc000 EDX=00000240
+-
+-ESI=00010094 EDI=00000000 EBP=f0119fd8 ESP=f0119fbc
+-
+-EIP=f0102fe1 EFL=00000092 [--S-A--] CPL=0 II=0 A20=1 SMM=0 HLT=0
+-
+-ES =0010 00000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+-
+-CS =0008 00000000 ffffffff 00cf9a00 DPL=0 CS32 [-R-]
+-
+-SS =0010 00000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+-
+-DS =0010 00000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+-
+-FS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-GS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-LDT=0000 00000000 00000000 00008200 DPL=0 LDT
+-
+-TR =0028 f017ea20 00000067 00408900 DPL=0 TSS32-avl
+-
+-GDT=     f011b320 0000002f
+-
+-IDT=     f017e200 000007ff
+-
+-CR0=80050033 CR2=00000000 CR3=003bc000 CR4=00000010
+-
+-DR0=00000000 DR1=00000000 DR2=00000000 DR3=00000000
+-
+-DR6=ffff0ff0 DR7=00000400
+-
+-EFER=0000000000000000
+-
+-FCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80
+-
+-FPR0=0000000000000000 0000 FPR1=0000000000000000 0000
+-
+-FPR2=0000000000000000 0000 FPR3=0000000000000000 0000
+-
+-FPR4=0000000000000000 0000 FPR5=0000000000000000 0000
+-
+-FPR6=0000000000000000 0000 FPR7=0000000000000000 0000
+-
+-XMM00=00000000000000000000000000000000 
+-
+-XMM01=00000000000000000000000000000000
+-
+-XMM02=00000000000000000000000000000000
+-
+-XMM03=00000000000000000000000000000000
+-
+-XMM04=00000000000000000000000000000000
+- 
+-XMM05=00000000000000000000000000000000
+-
+-XMM06=00000000000000000000000000000000
+-
+-XMM07=00000000000000000000000000000000
+-
+-
+-* (gdb) p tf
+-$1 = (struct Trapframe *) 0xf01c1000
+-
+-* (gdb) print sizeof(struct Trapframe) / sizeof(int)
+-$2 = 17
+-
+-* (gdb) x/17x tf
+-0xf01c1000: 0x00000000  0x00000000  0x00000000  0x00000000
+-
+-0xf01c1010: 0x00000000  0x00000000  0x00000000  0x00000000
+-
+-0xf01c1020: 0x00000023  0x00000023  0x00000000  0x00000000
+-
+-0xf01c1030: 0x00800020  0x0000001b  0x00000000  0xeebfe000
+-
+-0xf01c1040: 0x00000023
+-
+-* (gdb) disas
+-
+-Dump of assembler code for function env_pop_tf:
+-
+-=> 0xf0102fe1 <+0>:	push   %ebp
+-
+-   0xf0102fe2 <+1>:	mov    %esp,%ebp
+-
+-   0xf0102fe4 <+3>:	sub    $0xc,%esp
+-
+-   0xf0102fe7 <+6>:	mov    0x8(%ebp),%esp
+-
+-   0xf0102fea <+9>:	popa 
+-  
+-   0xf0102feb <+10>:	pop    %es
+-
+-   0xf0102fec <+11>:	pop    %ds
+-
+-   0xf0102fed <+12>:	add    $0x8,%esp
+-
+-   0xf0102ff0 <+15>:	iret  
+- 
+-   0xf0102ff1 <+16>:	push   $0xf0105878
+-
+-   0xf0102ff6 <+21>:	push   $0x214
+-
+-   0xf0102ffb <+26>:	push   $0xf0105816
+-
+-   0xf0103000 <+31>:	call   0xf01000a9 <_panic>
+-
+-End of assembler dump.
+-
+-* (gdb) si 4
+-
+-=> 0xf0102fea <env_pop_tf+9>:	popa 
+-  
+-0xf0102fea	523		asm volatile("\tmovl %0,%%esp\n"
+-
+-* (gdb) x/17x $sp
+-
+-0xf01c1000:	0x00000000	0x00000000	0x00000000	0x00000000
+-
+-0xf01c1010:	0x00000000	0x00000000	0x00000000	0x00000000
+-
+-0xf01c1020:	0x00000023	0x00000023	0x00000000	0x00000000
+-
+-0xf01c1030:	0x00800020	0x0000001b	0x00000000	0xeebfe000
+-
+-0xf01c1040:	0x00000023
+-
+-* (ver tabla del ejercicio env_pop_tf)
+-
+-  * Los primero 8 valores (0x00000000) son los registros de propósito general: %edi, %esi, %ebp, %oesp, %ebx, %edx, %ecx y %eax.
+-  * El que le sigue, 0x00000023, corresponde a  %es. El siguiente, tambien 0x00000023, corresponde a %ds. Estos 2 valores se configuraron inicialmente en env_alloc: e->env_tf.tf_es = GD_UD | 3 (env.c:255 y env.c:256). Si miramos la dirección en binario (0000000000100011) poder ver que el RPL asignado (3) son los ultimos 2 bits. El siguiente es la tabla GDT y el resto el índice.
+-  * 0x00000000 es trapno.
+-  * 0x00000000 es error code.
+-  * 0x00800020 es %eip. Su valor fue seteado en load_icode, env.c:416, instruccion: e->env_tf.tf_eip = elf->e_entry;
+-  * 0x0000001b es  %cs. En binario: 0000000000011011. Nuevamente, los ultimos 2 bits son los del RPL asignado (3). El siguiente indica la tabla GDT y los restantes el índice. Fue asignado en por medio de la sentancia e->env_tf.tf_cs = GD_UT | 3; ubicada en la función env_alloc (env.c:259).
+-  * 0x00000000 es EFLAGS.
+-  * 0xeebfe000 es %esp. Apunta al start user stack. De vuelta se configuró en env_alloc: e->env_tf.tf_esp = USTACKTOP; (env.c:258).
+-  * 0x00000023 es %ss. Se configuro en env_alloc: e->env_tf.tf_ss = GD_UD | 3; (env.c:258).
+-
+-* (gdb) si 4
+-
+-=> 0xf0102ff0 <env_pop_tf+15>:	iret   
+-0xf0102ff0	523		asm volatile("\tmovl %0,%%esp\n"
+-
+-* (qemu) info registers
+-
+-EAX=00000000 EBX=00000000 ECX=00000000 EDX=00000000
+-
+-ESI=00000000 EDI=00000000 EBP=00000000 ESP=f01c1030
+-
+-EIP=f0102ff0 EFL=00000096 [--S-AP-] CPL=0 II=0 A20=1 SMM=0 HLT=0
+-
+-ES =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-CS =0008 00000000 ffffffff 00cf9a00 DPL=0 CS32 [-R-]
+-
+-SS =0010 00000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+-
+-DS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-FS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-GS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-LDT=0000 00000000 00000000 00008200 DPL=0 LDT
+-
+-TR =0028 f017ea20 00000067 00408900 DPL=0 TSS32-avl
+-
+-GDT=     f011b320 0000002f
+-
+-IDT=     f017e200 000007ff
+-
+-CR0=80050033 CR2=00000000 CR3=003bc000 CR4=00000010
+-
+-DR0=00000000 DR1=00000000 DR2=00000000 DR3=00000000
+-
+-DR6=ffff0ff0 DR7=00000400
+-
+-EFER=0000000000000000
+-
+-FCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80
+-
+-FPR0=0000000000000000 0000 FPR1=0000000000000000 0000
+-
+-FPR2=0000000000000000 0000 FPR3=0000000000000000 0000
+-
+-FPR4=0000000000000000 0000 FPR5=0000000000000000 0000
+-
+-FPR6=0000000000000000 0000 FPR7=0000000000000000 0000
+-
+-XMM00=00000000000000000000000000000000
+- 
+-XMM01=00000000000000000000000000000000
+-
+-XMM02=00000000000000000000000000000000
+-XMM03=00000000000000000000000000000000
+-
+-XMM04=00000000000000000000000000000000
+-
+-XMM05=00000000000000000000000000000000
+-
+-XMM06=00000000000000000000000000000000
+-
+-XMM07=00000000000000000000000000000000
+-
+-ESP=f01b7030 es el stack, y vemos que en esa dirección anteriormente hemos impreso 0x00800020 correspondiente a %eip. Por lo tanto afirmamos que el stack queda apuntando al valor de %eip que debemos recuperar.
+-ES pasa a tener c igual a 3 (privilegio de usuario) porque lo recuperamos (notar que CS no se llegó a recuperar y mantiene un DPL = 0).
+-
+-* (gdb) si
+-
+-=> 0x800020:	cmp    $0xeebfe000,%esp
+-
+-0x00800020 in ?? ()
+-
+-* (gdb) p $pc
+-
+-$3 = (void (*)()) 0x800020
+-
+-* (gdb) symbol-file obj/user/hello
+-
+-¿Cargar una tabla de símbolos nueva desde «obj/user/hello»? (y or n) y
+-Leyendo símbolos desde obj/user/hello...hecho.
+-Error in re-setting breakpoint 1: No hay un archivo fuente con el nombre env.c.
+-
+-* (gdb) p $pc
+- 
+-$4 = (void (*)()) 0x800020 <_start>
+-
+-* (qemu) info registers
+-
+-EAX=00000000 EBX=00000000 ECX=00000000 EDX=00000000
+-
+-ESI=00000000 EDI=00000000 EBP=00000000 ESP=eebfe000
+-
+-EIP=00800020 EFL=00000002 [-------] CPL=3 II=0 A20=1 SMM=0 HLT=0
+-
+-ES =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-CS =001b 00000000 ffffffff 00cffa00 DPL=3 CS32 [-R-]
+-
+-SS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-DS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-FS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-GS =0023 00000000 ffffffff 00cff300 DPL=3 DS   [-WA]
+-
+-LDT=0000 00000000 00000000 00008200 DPL=0 LDT
+-
+-TR =0028 f017ea20 00000067 00408900 DPL=0 TSS32-avl
+-
+-GDT=     f011b320 0000002f
+-
+-IDT=     f017e200 000007ff
+-
+-CR0=80050033 CR2=00000000 CR3=003bc000 CR4=00000010
+-
+-DR0=00000000 DR1=00000000 DR2=00000000 DR3=00000000 
+-
+-DR6=ffff0ff0 DR7=00000400
+-
+-EFER=0000000000000000
+-
+-FCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80
+-
+-FPR0=0000000000000000 0000 FPR1=0000000000000000 0000
+-
+-FPR2=0000000000000000 0000 FPR3=0000000000000000 0000
+-
+-FPR4=0000000000000000 0000 FPR5=0000000000000000 0000
+-
+-FPR6=0000000000000000 0000 FPR7=0000000000000000 0000
+-
+-XMM00=00000000000000000000000000000000
+-
+-XMM01=00000000000000000000000000000000
+-
+-XMM02=00000000000000000000000000000000
+-XMM03=00000000000000000000000000000000
+-
+-XMM04=00000000000000000000000000000000
+-
+-XMM05=00000000000000000000000000000000
+-
+-XMM06=00000000000000000000000000000000
+-
+-XMM07=00000000000000000000000000000000
+-
+-Se recupera la %eip: EIP=00800020. No es casualidad ya que habia sido asignado en load_icode.
+-
+-Ahora cambiamos de environment y efectivamente queda expresado en el valor de CPL que ahora vale 3.
+-
+-Finalmente se recuperó el valor de %cs y a diferencia del punto anterios, ahora su DPL vale 3.
+-
+-* (gdb) tbreak syscall
+-
+-Punto de interrupción temporal 2 at 0x8009ea: file lib/syscall.c, line 23.
+-
+-* (gdb) c
+-
+-Continuando.
+-
+-=> 0x8009ea <syscall+17>:	mov    0x8(%ebp),%ecx
+-
+-Temporary breakpoint 2, syscall (num=0, check=-289415544, a1=4005551752, 
+-    a2=13, a3=0, a4=0, a5=0) at lib/syscall.c:23
+-23		asm volatile("int %1\n"
+-
+-* (gdb) disas
+-
+-Dump of assembler code for function syscall:
+- 
+-    0x008009f3 <+0>:	push %ebp
+- 
+-    0x008009f4 <+1>:	mov %esp,%ebp 
+-
+-    0x008009f6 <+3>:	push %edi 
+-
+-    0x008009f7 <+4>:	push %esi 
+-
+-    0x008009f8 <+5>:	push %ebx 
+-
+-    0x008009f9 <+6>: sub $0x1c,%esp 
+-
+-    0x008009fc <+9>:	mov %eax,-0x20(%ebp) 
+-
+-    0x008009ff <+12>:	mov %edx,-0x1c(%ebp) 
+-
+-    0x00800a02 <+15>: mov %ecx,%edx 
+-
+-=>  0x00800a04 <+17>:	mov 0x8(%ebp),%ecx 
+-
+-    0x00800a07 <+20>:	mov 0xc(%ebp),%ebx 
+-
+-    0x00800a0a <+23>:	mov 0x10(%ebp),%edi 
+-
+-    0x00800a0d <+26>:	mov 0x14(%ebp),%esi 
+-
+-    0x00800a10 <+29>:	int $0x30 
+-
+-    0x00800a12 <+31>:	cmpl $0x0,-0x1c(%ebp) 
+-
+-    0x00800a16 <+35>:	je 0x800a35 <syscall+66> 
+-
+-    0x00800a18 <+37>:	test %eax,%eax 
+-
+-    0x00800a1a <+39>:	jle 0x800a35 <syscall+66> 
+-
+-    0x00800a1c <+41>:	mov -0x20(%ebp),%edx 
+-
+-    0x00800a1f <+44>:	sub $0xc,%esp
+-
+-    0x00800a22 <+47>:	push %eax 
+-
+-    0x00800a23 <+48>:	push %edx 
+-
+----Type to continue, or q to quit--- 
+-
+-    0x00800a24 <+49>:	push $0x800fd4 
+-
+-    0x00800a29 <+54>:	push $0x23
+- 
+-    0x00800a2b <+56>:	push $0x800ff1 
+-
+-    0x00800a30 <+61>:	call 
+-
+-    0x800acd <_panic> 
+-
+-    0x00800a35 <+66>:	lea -0xc(%ebp),%esp 
+-
+-    0x00800a38 <+69>:	pop %ebx
+- 
+-    0x00800a39 <+70>:	pop %esi 
+-
+-    0x00800a3a <+71>:	pop %edi 
+-
+-    0x00800a3b <+72>:	pop %ebp 
+-
+-    0x00800a3c <+73>:	ret
+-
+-End of assembler dump.
+-
+-
+-* (gdb) si 4 
+-
+-=>  0x800a10 <syscall+29>:	int $0x30
+- 
+-    0x00800a10	23	asm volatile("int %1\n" 
+-
+-* (gdb) si 
+-
+-aviso: A handler for the OS ABI "GNU/Linux" is not built into this configuration of GDB. Attempting to continue with the default i8086 settings.
+-
+-Ocurre una excepción y finalizó.
+-
+-
+-kern_idt
+----------
+-
+-**PREGUNTA:** 
+-
+-¿Cómo decidir si usar TRAPHANDLER o TRAPHANDLER_NOEC? ¿Qué pasaría si se usara solamente la primera?
+-
+-**RESPUESTA:**
+-
+-La diferencia es que la macro TRAPHANDLER_NOEC, se utiliza para los casos en los cuales la cpu no pushea un código de error. Si se usará siempre la primera, el trap frame quedaría distinto para aquellos traps en las cuales el cpu no pushea un código de error.
+-Usamos TRAPHANDLER_NOEC para las interrupciones o excepciones.
+-
+-**PREGUNTA:**
+-
+-Qué cambia, en la invocación de handlers, el segundo parámetro (istrap) de la macro SETGATE? ¿Por qué se elegiría un comportamiento u otro durante un syscall?
+-
+-**RESPUESTA:**
+-
+-La diferencia esta en que en una interrupción se debe volver a la misma linea de código en la que estaba el cpu antes de que ocurriera la excepción. Para una trap, tiene que pasar a la siguiente.
+-
+-
+-**PREGUNTA:** 
+-
+-Leer user/softint.c y ejecutarlo con make run-softint-nox. ¿Qué excepción se genera? Si hay diferencias con la que invoca el programa… ¿por qué mecanismo ocurre eso, y por qué razones?
+-
+-**RESPUESTA:**
+-
+-El programa de usuario user/softint.c invoca la excepción 14 correspondiente a la de page fault.
+-
+-Al ejecutar el programa con el comando make run-softint-nox observamos la siguiente salida:
+-
+-  edx  0x00000000
+-  ecx  0x00000000
+-  eax  0x00000000
+-  es   0x----0023
+-  ds   0x----0023
+-  trap 0x0000000d General Protection
+-  err  0x00000072
+-  eip  0x00800036
+-  cs   0x----001b
+-  flag 0x00000082
+-
+-Es decir, la excepción lanzada es diferente a la que el usuario a través del programa intenta ejecutar. Esa excepción, la de  "General Protection" corresponde a una violación de segmento. Es totalmente coherente que pase esto porque el kernel no debe permitir que el usuario invoque una excepción a elección. El mecanismo utilizado por el procesador para controlar estas situaciones es a través de los campos DPL (indica el nivel de privilegio del segmento) y CPL (indica el nivel de privilegio del procedimiento).
+-
+-user_evilhello
+---------------
+-
+-**PREGUNTA:**  
+-¿En qué se diferencia el código de la versión en evilhello.c mostrada arriba?
+-
+-**RESPUESTA:**
+-En este punto consideramos el código mostrado en el enunciado ya que el código fuente difiere.
+-
+-Es decir:
+-user/evilhello.c lo consideramos así:
+-
+-// evil hello world -- kernel pointer passed to kernel
+-// kernel should destroy user environment in response
+-
+-\#include <inc/lib.h>
+-void
+-umain(int argc, char **argv)
+-{
+-    // Imprime el primer byte del entry point como caracter.
+-    sys_cputs(0xf010000c, 1);
+-}
+-
+-En el código figuraba sys_cputs(0xf010000c, 100); pero imprimia un caracter no deseado lógicamente y no concordaba con el enunciado. Por eso lo  cambiamos.
+-
+-Se observa que en este código se pasa la dirección virtual directamente. En cambio en el código nuevo le terminamos pasando la dirección de memoria de "first" que almacena el primer byte del kernel pointer.
+-
+-**PREGUNTA:**
+-¿En qué cambia el comportamiento durante la ejecución? ¿Por qué? ¿Cuál es el mecanismo?
+-
+-**RESPUESTA:**
+-Los resultados de las ejecuciones son diferentes, en efecto, el código original imprime por pantalla la siguiente salida:
+-
+-<code>
+-\+ cc[USER] user/evilhello.c
+-
+-\+ ld obj/user/evilhello
+-
+-\+ ld obj/kern/kernel
+-
+-\+ mk obj/kern/kernel.img
+-
+-qemu-system-i386 -nographic -drive 
+-file=obj/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio -gdb tcp:127.0.0.1:26000 -D qemu.log  -d guest_errors
+-
+-6828 decimal is 15254 octal!
+-
+-Physical memory: 131072K available, base = 640K, extended = 130432K
+-
+-Starting page init
+-
+-Free page list checked. Continuing to page alloc check
+-
+-check_page_alloc() succeeded!
+-
+-Page alloc checked. Continuing to page check
+-
+-check_page() succeeded!
+-
+-Page checked. Continuing to set up virtual memory
+-
+-check_kern_pgdir() succeeded!
+-
+-check_page_installed_pgdir() succeeded!
+-
+-[00000000] new env 00001000
+-
+-Incoming TRAP frame at 0xefffffbc
+-
+-fIncoming TRAP frame at 0xefffffbc
+-
+-[00001000] exiting gracefully
+-
+-[00001000] free env 00001000
+-
+-Destroyed the only environment - nothing more to do!
+-
+-Welcome to the JOS kernel monitor!
+-
+-Type 'help' for a list of commands.
+-</code>
+-
+-Y el código nuevo imprime por pantalla la siguiente la salida:
+-
+-<code>
+-\+ cc kern/init.c
+-
+-\+ cc[USER] user/evilhello.c
+-
+-\+ ld obj/user/evilhello
+-
+-\+ ld obj/kern/kernel
+-
+-\+ mk obj/kern/kernel.img
+-
+-qemu-system-i386 -nographic -drive 
+-file=obj/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio 
+--gdb tcp:127.0.0.1:26000 -D qemu.log  -d guest_errors
+-
+-6828 decimal is 15254 octal!
+-
+-Physical memory: 131072K available, base = 640K, extended = 130432K
+-
+-Starting page init
+-
+-Free page list checked. Continuing to page alloc check
+-
+-check_page_alloc() succeeded!
+-
+-Page alloc checked. Continuing to page check
+-
+-check_page() succeeded!
+-
+-Page checked. Continuing to set up virtual memory
+-
+-check_kern_pgdir() succeeded!
+-
+-check_page_installed_pgdir() succeeded!
+-
+-[00000000] new env 00001000
+-
+-Incoming TRAP frame at 0xefffffbc
+-
+-[00001000] user fault va f010000c ip 00800039
+-
+-TRAP frame at 0xf01c1000
+-
+-  edi  0x00000000
+-
+-  esi  0x00000000
+-
+-  ebp  0xeebfdfd0
+-
+-  oesp 0xefffffdc
+-
+-  ebx  0x00000000
+-
+-  edx  0x00000000
+-
+-  ecx  0x00000000
+-
+-  eax  0x00000000
+-
+-  es   0x----0023
+-
+-  ds   0x----0023
+-
+-  trap 0x0000000e Page Fault
+-
+-  cr2  0xf010000c
+-
+-  err  0x00000005 [user, read, protection]
+-
+-  eip  0x00800039
+-
+-  cs   0x----001b
+-
+-  flag 0x00000082
+-
+-  esp  0xeebfdfb0
+-
+-  ss   0x----0023
+-
+-[00001000] free env 00001000
+-
+-Destroyed the only environment - nothing more to do!
+-
+-Welcome to the JOS kernel monitor!
+-
+-Type 'help' for a list of commands.
+-
+-</code>
+-
+-El comportamiento claramente cambia. En el código nuevo, a diferencia del orignal, no se llega a imprimir el primer byte del entry point dado que ocurre un page Fault antes.
+-
+-Esto nos dió la pista de lo que está ocurriendo. Se trata de un tema de permisos y checkeos faltantes en la función sys_cputs. En efecto, no controla que el usuario que usa dicha sys call tenga los permisos necesarios para leer las direcciones de memoria que desea imprimir. Esto explica por qué en el primer caso (código original) se pudo imprimir, y es por que le enviamos directamente la dirección virtual a la sys call.
+-
+-En el código nuevo en vez de llamar directamente a sys_cputs trata primero de asignar el byte a imprimir a la variable first. Pero eso no es posible ya que se controlan los permisos del usuario sobre las operaciones. Y claramente no tenemos permisos para leer la dirección de memoria del entry point, por eso provocamos un page fault.
+\ No newline at end of file
+diff --git a/conf/lab.mk b/conf/lab.mk
+index 9561d17..0e215d8 100755
+--- a/conf/lab.mk
++++ b/conf/lab.mk
+@@ -1,2 +1,2 @@
+-LAB=3
+-PACKAGEDATE=Thu Sep 29 14:25:51 EDT 2016
++LAB=2
++PACKAGEDATE=Wed Sep 21 11:13:24 EDT 2016
+diff --git a/grade-lab3 b/grade-lab3
+deleted file mode 100755
+index c7c2834..0000000
+--- a/grade-lab3
++++ /dev/null
+@@ -1,135 +0,0 @@
+-#!/usr/bin/env python3
+-
+-from gradelib import *
+-
+-r = Runner(save("jos.out"),
+-           stop_breakpoint("readline"))
+-
+-@test(1)
+-def test_divzero():
+-    r.user_test("divzero")
+-    r.match('Incoming TRAP frame at 0xefffff..',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x00000000 Divide error',
+-            '  eip  0x008.....',
+-            '  ss   0x----0023',
+-            '.00001000. free env 00001000',
+-            no=['1/0 is ........!'])
+-
+-@test(1)
+-def test_softint():
+-    r.user_test("softint")
+-    r.match('Welcome to the JOS kernel monitor!',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000d General Protection',
+-            '  eip  0x008.....',
+-            '  ss   0x----0023',
+-            '.00001000. free env 0000100')
+-
+-@test(1)
+-def test_badsegment():
+-    r.user_test("badsegment")
+-    r.match('Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000d General Protection',
+-            '  err  0x00000028',
+-            '  eip  0x008.....',
+-            '  ss   0x----0023',
+-            '.00001000. free env 0000100')
+-
+-end_part("A")
+-
+-@test(1)
+-def test_faultread():
+-    r.user_test("faultread")
+-    r.match('.00001000. user fault va 00000000 ip 008.....',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000e Page Fault',
+-            '  err  0x00000004.*',
+-            '.00001000. free env 0000100',
+-            no=['I read ........ from location 0!'])
+-
+-@test(1)
+-def test_faultreadkernel():
+-    r.user_test("faultreadkernel")
+-    r.match('.00001000. user fault va f0100000 ip 008.....',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000e Page Fault',
+-            '  err  0x00000005.*',
+-            '.00001000. free env 00001000',
+-            no=['I read ........ from location 0xf0100000!'])
+-
+-@test(1)
+-def test_faultwrite():
+-    r.user_test("faultwrite")
+-    r.match('.00001000. user fault va 00000000 ip 008.....',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000e Page Fault',
+-            '  err  0x00000006.*',
+-            '.00001000. free env 0000100')
+-
+-@test(1)
+-def test_faultwritekernel():
+-    r.user_test("faultwritekernel")
+-    r.match('.00001000. user fault va f0100000 ip 008.....',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x0000000e Page Fault',
+-            '  err  0x00000007.*',
+-            '.00001000. free env 0000100')
+-
+-@test(1)
+-def test_breakpoint():
+-    r.user_test("breakpoint")
+-    r.match('Welcome to the JOS kernel monitor!',
+-            'Incoming TRAP frame at 0xefffffbc',
+-            'TRAP frame at 0xf.......',
+-            '  trap 0x00000003 Breakpoint',
+-            '  eip  0x008.....',
+-            '  ss   0x----0023',
+-            no=['.00001000. free env 00001000'])
+-
+-@test(1)
+-def test_testbss():
+-    r.user_test("testbss")
+-    r.match('Making sure bss works right...',
+-            'Yes, good.  Now doing a wild write off the end...',
+-            '.00001000. user fault va 00c..... ip 008.....',
+-            '.00001000. free env 0000100')
+-
+-@test(1)
+-def test_hello():
+-    r.user_test("hello")
+-    r.match('.00000000. new env 00001000',
+-            'hello, world',
+-            'i am environment 00001000',
+-            '.00001000. exiting gracefully',
+-            '.00001000. free env 00001000',
+-            'Destroyed the only environment - nothing more to do!')
+-
+-@test(1)
+-def test_buggyhello():
+-    r.user_test("buggyhello")
+-    r.match('.00001000. user_mem_check assertion failure for va 00000001',
+-            '.00001000. free env 00001000')
+-
+-@test(1)
+-def test_buggyhello2():
+-    r.user_test("buggyhello2")
+-    r.match('.00001000. user_mem_check assertion failure for va 0....000',
+-            '.00001000. free env 00001000',
+-            no=['hello, world'])
+-
+-@test(1)
+-def test_evilhello():
+-    r.user_test("evilhello")
+-    r.match('.00001000. user_mem_check assertion failure for va f0100...',
+-            '.00001000. free env 00001000')
+-
+-end_part("B")
+-
+-run_tests()
+diff --git a/inc/env.h b/inc/env.h
+deleted file mode 100644
+index 503f7b9..0000000
+--- a/inc/env.h
++++ /dev/null
+@@ -1,59 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#ifndef JOS_INC_ENV_H
+-#define JOS_INC_ENV_H
+-
+-#include <inc/types.h>
+-#include <inc/trap.h>
+-#include <inc/memlayout.h>
+-
+-typedef int32_t envid_t;
+-
+-// An environment ID 'envid_t' has three parts:
+-//
+-// +1+---------------21-----------------+--------10--------+
+-// |0|          Uniqueifier             |   Environment    |
+-// | |                                  |      Index       |
+-// +------------------------------------+------------------+
+-//                                       \--- ENVX(eid) --/
+-//
+-// The environment index ENVX(eid) equals the environment's offset in the
+-// 'envs[]' array.  The uniqueifier distinguishes environments that were
+-// created at different times, but share the same environment index.
+-//
+-// All real environments are greater than 0 (so the sign bit is zero).
+-// envid_ts less than 0 signify errors.  The envid_t == 0 is special, and
+-// stands for the current environment.
+-
+-#define LOG2NENV		10
+-#define NENV			(1 << LOG2NENV)
+-#define ENVX(envid)		((envid) & (NENV - 1))
+-
+-// Values of env_status in struct Env
+-enum {
+-	ENV_FREE = 0,
+-	ENV_DYING,
+-	ENV_RUNNABLE,
+-	ENV_RUNNING,
+-	ENV_NOT_RUNNABLE
+-};
+-
+-// Special environment types
+-enum EnvType {
+-	ENV_TYPE_USER = 0,
+-};
+-
+-struct Env {
+-	struct Trapframe env_tf;	// Saved registers
+-	struct Env *env_link;		// Next free Env
+-	envid_t env_id;			// Unique environment identifier
+-	envid_t env_parent_id;		// env_id of this env's parent
+-	enum EnvType env_type;		// Indicates special system environments
+-	unsigned env_status;		// Status of the environment
+-	uint32_t env_runs;		// Number of times environment has run
+-
+-	// Address space
+-	pde_t *env_pgdir;		// Kernel virtual address of page dir
+-};
+-
+-#endif // !JOS_INC_ENV_H
+diff --git a/inc/lib.h b/inc/lib.h
+deleted file mode 100644
+index 611a57d..0000000
+--- a/inc/lib.h
++++ /dev/null
+@@ -1,56 +0,0 @@
+-// Main public header file for our user-land support library,
+-// whose code lives in the lib directory.
+-// This library is roughly our OS's version of a standard C library,
+-// and is intended to be linked into all user-mode applications
+-// (NOT the kernel or boot loader).
+-
+-#ifndef JOS_INC_LIB_H
+-#define JOS_INC_LIB_H 1
+-
+-#include <inc/types.h>
+-#include <inc/stdio.h>
+-#include <inc/stdarg.h>
+-#include <inc/string.h>
+-#include <inc/error.h>
+-#include <inc/assert.h>
+-#include <inc/env.h>
+-#include <inc/memlayout.h>
+-#include <inc/syscall.h>
+-
+-#define USED(x)		(void)(x)
+-
+-// main user program
+-void	umain(int argc, char **argv);
+-
+-// libmain.c or entry.S
+-extern const char *binaryname;
+-extern const volatile struct Env *thisenv;
+-extern const volatile struct Env envs[NENV];
+-extern const volatile struct PageInfo pages[];
+-
+-// exit.c
+-void	exit(void);
+-
+-// readline.c
+-char*	readline(const char *buf);
+-
+-// syscall.c
+-void	sys_cputs(const char *string, size_t len);
+-int	sys_cgetc(void);
+-envid_t	sys_getenvid(void);
+-int	sys_env_destroy(envid_t);
+-
+-
+-
+-/* File open modes */
+-#define	O_RDONLY	0x0000		/* open for reading only */
+-#define	O_WRONLY	0x0001		/* open for writing only */
+-#define	O_RDWR		0x0002		/* open for reading and writing */
+-#define	O_ACCMODE	0x0003		/* mask for above modes */
+-
+-#define	O_CREAT		0x0100		/* create if nonexistent */
+-#define	O_TRUNC		0x0200		/* truncate to zero length */
+-#define	O_EXCL		0x0400		/* error if already exists */
+-#define O_MKDIR		0x0800		/* create directory, not regular file */
+-
+-#endif	// !JOS_INC_LIB_H
+diff --git a/inc/mmu.h b/inc/mmu.h
+index 7598413..8017ab9 100755
+--- a/inc/mmu.h
++++ b/inc/mmu.h
+@@ -165,11 +165,11 @@ struct Segdesc {
+ 	unsigned sd_base_31_24 : 8; // High bits of segment base address
+ };
+ // Null segment
+-#define SEG_NULL	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
++#define SEG_NULL	(struct Segdesc){ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+ // Segment that is loadable but faults when used
+-#define SEG_FAULT	{ 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0 }
++#define SEG_FAULT	(struct Segdesc){ 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0 }
+ // Normal segment
+-#define SEG(type, base, lim, dpl) 					\
++#define SEG(type, base, lim, dpl) (struct Segdesc)			\
+ { ((lim) >> 12) & 0xffff, (base) & 0xffff, ((base) >> 16) & 0xff,	\
+     type, 1, dpl, 1, (unsigned) (lim) >> 28, 0, 0, 1, 1,		\
+     (unsigned) (base) >> 24 }
+diff --git a/inc/syscall.h b/inc/syscall.h
+deleted file mode 100644
+index fd8df06..0000000
+--- a/inc/syscall.h
++++ /dev/null
+@@ -1,13 +0,0 @@
+-#ifndef JOS_INC_SYSCALL_H
+-#define JOS_INC_SYSCALL_H
+-
+-/* system call numbers */
+-enum {
+-	SYS_cputs = 0,
+-	SYS_cgetc,
+-	SYS_getenvid,
+-	SYS_env_destroy,
+-	NSYSCALLS
+-};
+-
+-#endif /* !JOS_INC_SYSCALL_H */
+diff --git a/inc/trap.h b/inc/trap.h
+deleted file mode 100644
+index c3437af..0000000
+--- a/inc/trap.h
++++ /dev/null
+@@ -1,80 +0,0 @@
+-#ifndef JOS_INC_TRAP_H
+-#define JOS_INC_TRAP_H
+-
+-// Trap numbers
+-// These are processor defined:
+-#define T_DIVIDE     0		// divide error
+-#define T_DEBUG      1		// debug exception
+-#define T_NMI        2		// non-maskable interrupt
+-#define T_BRKPT      3		// breakpoint
+-#define T_OFLOW      4		// overflow
+-#define T_BOUND      5		// bounds check
+-#define T_ILLOP      6		// illegal opcode
+-#define T_DEVICE     7		// device not available
+-#define T_DBLFLT     8		// double fault
+-/* #define T_COPROC  9 */	// reserved (not generated by recent processors)
+-#define T_TSS       10		// invalid task switch segment
+-#define T_SEGNP     11		// segment not present
+-#define T_STACK     12		// stack exception
+-#define T_GPFLT     13		// general protection fault
+-#define T_PGFLT     14		// page fault
+-/* #define T_RES    15 */	// reserved
+-#define T_FPERR     16		// floating point error
+-#define T_ALIGN     17		// aligment check
+-#define T_MCHK      18		// machine check
+-#define T_SIMDERR   19		// SIMD floating point error
+-
+-// These are arbitrarily chosen, but with care not to overlap
+-// processor defined exceptions or interrupt vectors.
+-#define T_SYSCALL   48		// system call
+-#define T_DEFAULT   500		// catchall
+-
+-#define IRQ_OFFSET	32	// IRQ 0 corresponds to int IRQ_OFFSET
+-
+-// Hardware IRQ numbers. We receive these as (IRQ_OFFSET+IRQ_WHATEVER)
+-#define IRQ_TIMER        0
+-#define IRQ_KBD          1
+-#define IRQ_SERIAL       4
+-#define IRQ_SPURIOUS     7
+-#define IRQ_IDE         14
+-#define IRQ_ERROR       19
+-
+-#ifndef __ASSEMBLER__
+-
+-#include <inc/types.h>
+-
+-struct PushRegs {
+-	/* registers as pushed by pusha */
+-	uint32_t reg_edi;
+-	uint32_t reg_esi;
+-	uint32_t reg_ebp;
+-	uint32_t reg_oesp;		/* Useless */
+-	uint32_t reg_ebx;
+-	uint32_t reg_edx;
+-	uint32_t reg_ecx;
+-	uint32_t reg_eax;
+-} __attribute__((packed));
+-
+-struct Trapframe {
+-	struct PushRegs tf_regs;
+-	uint16_t tf_es;
+-	uint16_t tf_padding1;
+-	uint16_t tf_ds;
+-	uint16_t tf_padding2;
+-	uint32_t tf_trapno;
+-	/* below here defined by x86 hardware */
+-	uint32_t tf_err;
+-	uintptr_t tf_eip;
+-	uint16_t tf_cs;
+-	uint16_t tf_padding3;
+-	uint32_t tf_eflags;
+-	/* below here only when crossing rings, such as from user to kernel */
+-	uintptr_t tf_esp;
+-	uint16_t tf_ss;
+-	uint16_t tf_padding4;
+-} __attribute__((packed));
+-
+-
+-#endif /* !__ASSEMBLER__ */
+-
+-#endif /* !JOS_INC_TRAP_H */
+diff --git a/kern/Makefrag b/kern/Makefrag
+index b39cff2..3b2982e 100755
+--- a/kern/Makefrag
++++ b/kern/Makefrag
+@@ -36,20 +36,7 @@ KERN_SRCFILES :=	kern/entry.S \
+ KERN_SRCFILES := $(wildcard $(KERN_SRCFILES))
+ 
+ # Binary program images to embed within the kernel.
+-# Binary files for LAB3
+-KERN_BINFILES :=	user/hello \
+-			user/buggyhello \
+-			user/buggyhello2 \
+-			user/evilhello \
+-			user/testbss \
+-			user/divzero \
+-			user/breakpoint \
+-			user/softint \
+-			user/badsegment \
+-			user/faultread \
+-			user/faultreadkernel \
+-			user/faultwrite \
+-			user/faultwritekernel
++KERN_BINFILES := 
+ 
+ KERN_OBJFILES := $(patsubst %.c, $(OBJDIR)/%.o, $(KERN_SRCFILES))
+ KERN_OBJFILES := $(patsubst %.S, $(OBJDIR)/%.o, $(KERN_OBJFILES))
+diff --git a/kern/entry.S b/kern/entry.S
+index 4d15e42..b7c4729 100755
+--- a/kern/entry.S
++++ b/kern/entry.S
+@@ -2,7 +2,6 @@
+ 
+ #include <inc/mmu.h>
+ #include <inc/memlayout.h>
+-#include <inc/trap.h>
+ 
+ # Shift Right Logical 
+ #define SRL(val, shamt)		(((val) >> (shamt)) & ~(-1 << (32 - (shamt))))
+diff --git a/kern/env.c b/kern/env.c
+deleted file mode 100644
+index fbff245..0000000
+--- a/kern/env.c
++++ /dev/null
+@@ -1,578 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#include <inc/x86.h>
+-#include <inc/mmu.h>
+-#include <inc/error.h>
+-#include <inc/string.h>
+-#include <inc/assert.h>
+-#include <inc/elf.h>
+-
+-#include <kern/env.h>
+-#include <kern/pmap.h>
+-#include <kern/trap.h>
+-#include <kern/monitor.h>
+-
+-struct Env *envs = NULL;           // All environments
+-struct Env *curenv = NULL;         // The current env
+-static struct Env *env_free_list;  // Free environment list
+-                                   // (linked by Env->env_link)
+-
+-#define ENVGENSHIFT 12  // >= LOGNENV
+-
+-// Global descriptor table.
+-//
+-// Set up global descriptor table (GDT) with separate segments for
+-// kernel mode and user mode.  Segments serve many purposes on the x86.
+-// We don't use any of their memory-mapping capabilities, but we need
+-// them to switch privilege levels.
+-//
+-// The kernel and user segments are identical except for the DPL.
+-// To load the SS register, the CPL must equal the DPL.  Thus,
+-// we must duplicate the segments for the user and the kernel.
+-//
+-// In particular, the last argument to the SEG macro used in the
+-// definition of gdt specifies the Descriptor Privilege Level (DPL)
+-// of that descriptor: 0 for kernel and 3 for user.
+-//
+-struct Segdesc gdt[] = {
+-	// 0x0 - unused (always faults -- for trapping NULL far pointers)
+-	SEG_NULL,
+-
+-	// 0x8 - kernel code segment
+-	[GD_KT >> 3] = SEG(STA_X | STA_R, 0x0, 0xffffffff, 0),
+-
+-	// 0x10 - kernel data segment
+-	[GD_KD >> 3] = SEG(STA_W, 0x0, 0xffffffff, 0),
+-
+-	// 0x18 - user code segment
+-	[GD_UT >> 3] = SEG(STA_X | STA_R, 0x0, 0xffffffff, 3),
+-
+-	// 0x20 - user data segment
+-	[GD_UD >> 3] = SEG(STA_W, 0x0, 0xffffffff, 3),
+-
+-	// 0x28 - tss, initialized in trap_init_percpu()
+-	[GD_TSS0 >> 3] = SEG_NULL
+-};
+-
+-struct Pseudodesc gdt_pd = { sizeof(gdt) - 1, (unsigned long) gdt };
+-
+-//
+-// Converts an envid to an env pointer.
+-// If checkperm is set, the specified environment must be either the
+-// current environment or an immediate child of the current environment.
+-//
+-// RETURNS
+-//   0 on success, -E_BAD_ENV on error.
+-//   On success, sets *env_store to the environment.
+-//   On error, sets *env_store to NULL.
+-//
+-int
+-envid2env(envid_t envid, struct Env **env_store, bool checkperm)
+-{
+-	struct Env *e;
+-
+-	// If envid is zero, return the current environment.
+-	if (envid == 0) {
+-		*env_store = curenv;
+-		return 0;
+-	}
+-
+-	// Look up the Env structure via the index part of the envid,
+-	// then check the env_id field in that struct Env
+-	// to ensure that the envid is not stale
+-	// (i.e., does not refer to a _previous_ environment
+-	// that used the same slot in the envs[] array).
+-	e = &envs[ENVX(envid)];
+-	if (e->env_status == ENV_FREE || e->env_id != envid) {
+-		*env_store = 0;
+-		return -E_BAD_ENV;
+-	}
+-
+-	// Check that the calling environment has legitimate permission
+-	// to manipulate the specified environment.
+-	// If checkperm is set, the specified environment
+-	// must be either the current environment
+-	// or an immediate child of the current environment.
+-	if (checkperm && e != curenv && e->env_parent_id != curenv->env_id) {
+-		*env_store = 0;
+-		return -E_BAD_ENV;
+-	}
+-
+-	*env_store = e;
+-	return 0;
+-}
+-
+-// Mark all environments in 'envs' as free, set their env_ids to 0,
+-// and insert them into the env_free_list.
+-// Make sure the environments are in the free list in the same order
+-// they are in the envs array (i.e., so that the first call to
+-// env_alloc() returns envs[0]).
+-//
+-void
+-env_init(void)
+-{
+-	// Set up envs array
+-	// LAB 3: Your code here.
+-	env_free_list = envs;
+-	for (int i = 0; i < NENV; i++) {
+-		envs[i].env_id = 0;
+-		envs[i].env_status = ENV_FREE;
+-
+-		if (i >= NENV - 1) {
+-			envs[i].env_link = NULL;
+-			continue;
+-		}
+-
+-		envs[i].env_link = &envs[i + 1];
+-	}
+-
+-	// Per-CPU part of the initialization
+-	env_init_percpu();
+-}
+-
+-// Load GDT and segment descriptors.
+-void
+-env_init_percpu(void)
+-{
+-	lgdt(&gdt_pd);
+-	// The kernel never uses GS or FS, so we leave those set to
+-	// the user data segment.
+-	asm volatile("movw %%ax,%%gs" : : "a"(GD_UD | 3));
+-	asm volatile("movw %%ax,%%fs" : : "a"(GD_UD | 3));
+-	// The kernel does use ES, DS, and SS.  We'll change between
+-	// the kernel and user data segments as needed.
+-	asm volatile("movw %%ax,%%es" : : "a"(GD_KD));
+-	asm volatile("movw %%ax,%%ds" : : "a"(GD_KD));
+-	asm volatile("movw %%ax,%%ss" : : "a"(GD_KD));
+-	// Load the kernel text segment into CS.
+-	asm volatile("ljmp %0,$1f\n 1:\n" : : "i"(GD_KT));
+-	// For good measure, clear the local descriptor table (LDT),
+-	// since we don't use it.
+-	lldt(0);
+-}
+-
+-//
+-// Initialize the kernel virtual memory layout for environment e.
+-// Allocate a page directory, set e->env_pgdir accordingly,
+-// and initialize the kernel portion of the new environment's address space.
+-// Do NOT (yet) map anything into the user portion
+-// of the environment's virtual address space.
+-//
+-// Returns 0 on success, < 0 on error.  Errors include:
+-//	-E_NO_MEM if page directory or table could not be allocated.
+-//
+-static int
+-env_setup_vm(struct Env *e)
+-{
+-	int i;
+-	struct PageInfo *p = NULL;
+-
+-	// Allocate a page for the page directory
+-	if (!(p = page_alloc(ALLOC_ZERO)))
+-		return -E_NO_MEM;
+-
+-	// Now, set e->env_pgdir and initialize the page directory.
+-	//
+-	// Hint:
+-	//    - The VA space of all envs is identical above UTOP
+-	//	(except at UVPT, which we've set below).
+-	//	See inc/memlayout.h for permissions and layout.
+-	//	Can you use kern_pgdir as a template?  Hint: Yes.
+-	//	(Make sure you got the permissions right in Lab 2.)
+-	//    - The initial VA below UTOP is empty.
+-	//    - You do not need to make any more calls to page_alloc.
+-	//    - Note: In general, pp_ref is not maintained for
+-	//	physical pages mapped only above UTOP, but env_pgdir
+-	//	is an exception -- you need to increment env_pgdir's
+-	//	pp_ref for env_free to work correctly.
+-	//    - The functions in kern/pmap.h are handy.
+-
+-	// LAB 3: Your code here.
+-
+-	/* Can you use kern_pgdir as a template?  Hint: Yes and memcpy is
+-	 * allowed by dato */
+-	e->env_pgdir = (pde_t *) page2kva(p);
+-	memcpy(e->env_pgdir, kern_pgdir, PGSIZE);
+-
+-	/* you need to increment env_pgdir's pp_ref for env_free to work
+-	 * correctly.*/
+-	p->pp_ref++;
+-
+-	// UVPT maps the env's own page table read-only.
+-	// Permissions: kernel R, user R
+-	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
+-	return 0;
+-}
+-
+-//
+-// Allocates and initializes a new environment.
+-// On success, the new environment is stored in *newenv_store.
+-//
+-// Returns 0 on success, < 0 on failure.  Errors include:
+-//	-E_NO_FREE_ENV if all NENVS environments are allocated
+-//	-E_NO_MEM on memory exhaustion
+-//
+-int
+-env_alloc(struct Env **newenv_store, envid_t parent_id)
+-{
+-	int32_t generation;
+-	int r;
+-	struct Env *e;
+-
+-	if (!(e = env_free_list))
+-		return -E_NO_FREE_ENV;
+-
+-	// Allocate and set up the page directory for this environment.
+-	if ((r = env_setup_vm(e)) < 0)
+-		return r;
+-
+-	// Generate an env_id for this environment.
+-	generation = (e->env_id + (1 << ENVGENSHIFT)) & ~(NENV - 1);
+-	if (generation <= 0)  // Don't create a negative env_id.
+-		generation = 1 << ENVGENSHIFT;
+-	e->env_id = generation | (e - envs);
+-
+-	// Set the basic status variables.
+-	e->env_parent_id = parent_id;
+-	e->env_type = ENV_TYPE_USER;
+-	e->env_status = ENV_RUNNABLE;
+-	e->env_runs = 0;
+-
+-	// Clear out all the saved register state,
+-	// to prevent the register values
+-	// of a prior environment inhabiting this Env structure
+-	// from "leaking" into our new environment.
+-	memset(&e->env_tf, 0, sizeof(e->env_tf));
+-
+-	// Set up appropriate initial values for the segment registers.
+-	// GD_UD is the user data segment selector in the GDT, and
+-	// GD_UT is the user text segment selector (see inc/memlayout.h).
+-	// The low 2 bits of each segment register contains the
+-	// Requestor Privilege Level (RPL); 3 means user mode.  When
+-	// we switch privilege levels, the hardware does various
+-	// checks involving the RPL and the Descriptor Privilege Level
+-	// (DPL) stored in the descriptors themselves.
+-	e->env_tf.tf_ds = GD_UD | 3;
+-	e->env_tf.tf_es = GD_UD | 3;
+-	e->env_tf.tf_ss = GD_UD | 3;
+-	e->env_tf.tf_esp = USTACKTOP;
+-	e->env_tf.tf_cs = GD_UT | 3;
+-	// You will set e->env_tf.tf_eip later.
+-
+-	// commit the allocation
+-	env_free_list = e->env_link;
+-	*newenv_store = e;
+-
+-	cprintf("[%08x] new env %08x\n", curenv ? curenv->env_id : 0, e->env_id);
+-	return 0;
+-}
+-
+-//
+-// Allocate len bytes of physical memory for environment env,
+-// and map it at virtual address va in the environment's address space.
+-// Does not zero or otherwise initialize the mapped pages in any way.
+-// Pages should be writable by user and kernel.
+-// Panic if any allocation attempt fails.
+-//
+-static void
+-region_alloc(struct Env *e, void *va, size_t len)
+-{
+-	// LAB 3: Your code here.
+-	// (But only if you need it for load_icode.)
+-	//
+-	// Hint: It is easier to use region_alloc if the caller can pass
+-	//   'va' and 'len' values that are not page-aligned.
+-	//   You should round va down, and round (va + len) up.
+-	//   (Watch out for corner-cases!)
+-
+-	if (e == NULL) {
+-		cprintf("region_alloc : Envieronment structure is NULL and "
+-		        "this is not allowed");
+-		return;
+-	}
+-	uintptr_t addr_start = ROUNDDOWN((uintptr_t) va, PGSIZE);
+-	uintptr_t addr_end = ROUNDUP((uintptr_t) va + len, PGSIZE);
+-	while (addr_start < addr_end) {
+-		struct PageInfo *page = page_alloc(0);
+-		if (page == NULL) { /* panic attack !!! : not enought memory !! */
+-			panic("region_alloc: not enough memory for page_alloc");
+-		}
+-		page_insert(e->env_pgdir,
+-		            page,
+-		            (void *) addr_start,
+-		            PTE_U | PTE_W | PTE_P);
+-		addr_start += PGSIZE;
+-	}
+-}
+-
+-//
+-// Set up the initial program binary, stack, and processor flags
+-// for a user process.
+-// This function is ONLY called during kernel initialization,
+-// before running the first user-mode environment.
+-//
+-// This function loads all loadable segments from the ELF binary image
+-// into the environment's user memory, starting at the appropriate
+-// virtual addresses indicated in the ELF program header.
+-// At the same time it clears to zero any portions of these segments
+-// that are marked in the program header as being mapped
+-// but not actually present in the ELF file - i.e., the program's bss section.
+-//
+-// All this is very similar to what our boot loader does, except the boot
+-// loader also needs to read the code from disk.  Take a look at
+-// boot/main.c to get ideas.
+-//
+-// Finally, this function maps one page for the program's initial stack.
+-//
+-// load_icode panics if it encounters problems.
+-//  - How might load_icode fail?  What might be wrong with the given input?
+-//
+-static void
+-load_icode(struct Env *e, uint8_t *binary)
+-{
+-	// Hints:
+-	//  Load each program segment into virtual memory
+-	//  at the address specified in the ELF section header.
+-	//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
+-	//  Each segment's virtual address can be found in ph->p_va
+-	//  and its size in memory can be found in ph->p_memsz.
+-	//  The ph->p_filesz bytes from the ELF binary, starting at
+-	//  'binary + ph->p_offset', should be copied to virtual address
+-	//  ph->p_va.  Any remaining memory bytes should be cleared to zero.
+-	//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
+-	//  Use functions from the previous lab to allocate and map pages.
+-	//
+-	//  All page protection bits should be user read/write for now.
+-	//  ELF segments are not necessarily page-aligned, but you can
+-	//  assume for this function that no two segments will touch
+-	//  the same virtual page.
+-	//
+-	//  You may find a function like region_alloc useful.
+-	//
+-	//  Loading the segments is much simpler if you can move data
+-	//  directly into the virtual addresses stored in the ELF binary.
+-	//  So which page directory should be in force during
+-	//  this function?
+-	//
+-	//  You must also do something with the program's entry point,
+-	//  to make sure that the environment starts executing there.
+-	//  What?  (See env_run() and env_pop_tf() below.)
+-
+-	// LAB 3: Your code here.
+-	struct Elf *elf = (struct Elf *) binary;
+-
+-	if (elf->e_magic != ELF_MAGIC) {
+-		panic("Invalid elf binary");
+-	}
+-
+-	// First program header
+-	struct Proghdr *ph = (struct Proghdr *) ((uint8_t *) elf + elf->e_phoff);
+-
+-	// Last program header
+-	struct Proghdr *phe = ph + elf->e_phnum;
+-
+-	// Change to user pgdir
+-	lcr3(PADDR(e->env_pgdir));
+-
+-	/* Help
+-	 * ph->p_va - Virtual address where the segment must be loaded.
+-	 * ph->p_memsz - Size in bytes of the segment in memory.
+-	 * ph->p_filesz - Size in bytes of the segment in the file image.
+-	 * The segment bytes starts at elf + ph->offset and ends at elf +
+-	 * ph->offset + ph->p_filsesz
+-	 */
+-
+-	for (; ph < phe; ph++) {
+-		// Verify if the segment must be loaded
+-		if (ph->p_type != ELF_PROG_LOAD) {
+-			continue;
+-		}
+-
+-		if (ph->p_filesz > ph->p_memsz) {
+-			panic("Size in file must be less or equal than in "
+-			      "memory size");
+-		}
+-
+-		// Memory alloc
+-		region_alloc(e, (void *) ph->p_va, ph->p_memsz);
+-
+-		// Copy segment to memory
+-		void *segStarts = (void *) ((uint8_t *) elf + ph->p_offset);
+-		memcpy((void *) ph->p_va, segStarts, ph->p_filesz);
+-
+-		// Fill with zeros the rest
+-		void *zerosStarts = (void *) (ph->p_va + ph->p_filesz);
+-		memset(zerosStarts, 0, ph->p_memsz - ph->p_filesz);
+-	}
+-
+-	// Now map one page for the program's initial stack
+-	// at virtual address USTACKTOP - PGSIZE.
+-
+-	// LAB 3: Your code here.
+-	region_alloc(e, (void *) USTACKTOP - PGSIZE, PGSIZE);
+-
+-	// Set env entry point
+-	e->env_tf.tf_eip = elf->e_entry;
+-
+-	// Return to kern pgdir
+-	lcr3(PADDR(kern_pgdir));
+-}
+-
+-//
+-// Allocates a new env with env_alloc, loads the named elf
+-// binary into it with load_icode, and sets its env_type.
+-// This function is ONLY called during kernel initialization,
+-// before running the first user-mode environment.
+-// The new env's parent ID is set to 0.
+-//
+-void
+-env_create(uint8_t *binary, enum EnvType type)
+-{
+-	// LAB 3: Your code here.
+-	struct Env *newEnv;
+-
+-	// Alloc for the new env
+-	int errcode = env_alloc(&newEnv, 0);
+-	if (errcode < 0) {
+-		panic("Error allocating env: %e", errcode);
+-	}
+-
+-	// Load icode into user memory
+-	load_icode(newEnv, binary);
+-
+-	// Set env type
+-	newEnv->env_type = type;
+-}
+-
+-//
+-// Frees env e and all memory it uses.
+-//
+-void
+-env_free(struct Env *e)
+-{
+-	pte_t *pt;
+-	uint32_t pdeno, pteno;
+-	physaddr_t pa;
+-
+-	// If freeing the current environment, switch to kern_pgdir
+-	// before freeing the page directory, just in case the page
+-	// gets reused.
+-	if (e == curenv)
+-		lcr3(PADDR(kern_pgdir));
+-
+-	// Note the environment's demise.
+-	cprintf("[%08x] free env %08x\n", curenv ? curenv->env_id : 0, e->env_id);
+-
+-	// Flush all mapped pages in the user portion of the address space
+-	static_assert(UTOP % PTSIZE == 0);
+-	for (pdeno = 0; pdeno < PDX(UTOP); pdeno++) {
+-		// only look at mapped page tables
+-		if (!(e->env_pgdir[pdeno] & PTE_P))
+-			continue;
+-
+-		// find the pa and va of the page table
+-		pa = PTE_ADDR(e->env_pgdir[pdeno]);
+-		pt = (pte_t *) KADDR(pa);
+-
+-		// unmap all PTEs in this page table
+-		for (pteno = 0; pteno <= PTX(~0); pteno++) {
+-			if (pt[pteno] & PTE_P)
+-				page_remove(e->env_pgdir, PGADDR(pdeno, pteno, 0));
+-		}
+-
+-		// free the page table itself
+-		e->env_pgdir[pdeno] = 0;
+-		page_decref(pa2page(pa));
+-	}
+-
+-	// free the page directory
+-	pa = PADDR(e->env_pgdir);
+-	e->env_pgdir = 0;
+-	page_decref(pa2page(pa));
+-
+-	// return the environment to the free list
+-	e->env_status = ENV_FREE;
+-	e->env_link = env_free_list;
+-	env_free_list = e;
+-}
+-
+-//
+-// Frees environment e.
+-//
+-void
+-env_destroy(struct Env *e)
+-{
+-	env_free(e);
+-
+-	cprintf("Destroyed the only environment - nothing more to do!\n");
+-	while (1)
+-		monitor(NULL);
+-}
+-
+-
+-//
+-// Restores the register values in the Trapframe with the 'iret' instruction.
+-// This exits the kernel and starts executing some environment's code.
+-//
+-// This function does not return.
+-//
+-void
+-env_pop_tf(struct Trapframe *tf)
+-{
+-	asm volatile("\tmovl %0,%%esp\n"
+-	             "\tpopal\n"
+-	             "\tpopl %%es\n"
+-	             "\tpopl %%ds\n"
+-	             "\taddl $0x8,%%esp\n" /* skip tf_trapno and tf_errcode */
+-	             "\tiret\n"
+-	             :
+-	             : "g"(tf)
+-	             : "memory");
+-	panic("iret failed"); /* mostly to placate the compiler */
+-}
+-
+-//
+-// Context switch from curenv to env e.
+-// Note: if this is the first call to env_run, curenv is NULL.
+-//
+-// This function does not return.
+-//
+-void
+-env_run(struct Env *e)
+-{
+-	// Step 1: If this is a context switch (a new environment is running):
+-	//	   1. Set the current environment (if any) back to
+-	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
+-	//	      what other states it can be in),
+-	//	   2. Set 'curenv' to the new environment,
+-	//	   3. Set its status to ENV_RUNNING,
+-	//	   4. Update its 'env_runs' counter,
+-	//	   5. Use lcr3() to switch to its address space.
+-	// Step 2: Use env_pop_tf() to restore the environment's
+-	//	   registers and drop into user mode in the
+-	//	   environment.
+-
+-	// Hint: This function loads the new environment's state from
+-	//	e->env_tf.  Go back through the code you wrote above
+-	//	and make sure you have set the relevant parts of
+-	//	e->env_tf to sensible values.
+-
+-	// LAB 3: Your code here.
+-	/*
+-	//  If this is a context switch (a new environment is running)
+-	 */
+-	if (curenv && (curenv->env_status == ENV_RUNNING)) {
+-		/** ENV_RUNNABLE if it is ENV_RUNNING **/
+-		curenv->env_status = ENV_RUNNABLE;
+-	}
+-	// Set 'curenv' to the new environment
+-	curenv = e;
+-	// Set its status to ENV_RUNNING
+-	curenv->env_status = ENV_RUNNING;
+-	// Update its 'env_runs' counter
+-	curenv->env_runs++;
+-	// Use lcr3() to switch to its address space
+-	lcr3(PADDR(curenv->env_pgdir));
+-	// Use env_pop_tf() to restore the environment's registers
+-	env_pop_tf(&(curenv->env_tf));
+-}
+diff --git a/kern/env.h b/kern/env.h
+deleted file mode 100644
+index 9c574c1..0000000
+--- a/kern/env.h
++++ /dev/null
+@@ -1,35 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#ifndef JOS_KERN_ENV_H
+-#define JOS_KERN_ENV_H
+-
+-#include <inc/env.h>
+-
+-extern struct Env *envs;		// All environments
+-extern struct Env *curenv;		// Current environment
+-extern struct Segdesc gdt[];
+-
+-void	env_init(void);
+-void	env_init_percpu(void);
+-int	env_alloc(struct Env **e, envid_t parent_id);
+-void	env_free(struct Env *e);
+-void	env_create(uint8_t *binary, enum EnvType type);
+-void	env_destroy(struct Env *e);	// Does not return if e == curenv
+-
+-int	envid2env(envid_t envid, struct Env **env_store, bool checkperm);
+-// The following two functions do not return
+-void	env_run(struct Env *e) __attribute__((noreturn));
+-void	env_pop_tf(struct Trapframe *tf) __attribute__((noreturn));
+-
+-// Without this extra macro, we couldn't pass macros like TEST to
+-// ENV_CREATE because of the C pre-processor's argument prescan rule.
+-#define ENV_PASTE3(x, y, z) x ## y ## z
+-
+-#define ENV_CREATE(x, type)						\
+-	do {								\
+-		extern uint8_t ENV_PASTE3(_binary_obj_, x, _start)[];	\
+-		env_create(ENV_PASTE3(_binary_obj_, x, _start),		\
+-			   type);					\
+-	} while (0)
+-
+-#endif // !JOS_KERN_ENV_H
+diff --git a/kern/init.c b/kern/init.c
+index 1f48649..5860eae 100755
+--- a/kern/init.c
++++ b/kern/init.c
+@@ -8,8 +8,6 @@
+ #include <kern/console.h>
+ #include <kern/pmap.h>
+ #include <kern/kclock.h>
+-#include <kern/env.h>
+-#include <kern/trap.h>
+ 
+ 
+ void
+@@ -31,20 +29,9 @@ i386_init(void)
+ 	// Lab 2 memory management initialization functions
+ 	mem_init();
+ 
+-	// Lab 3 user environment initialization functions
+-	env_init();
+-	trap_init();
+-
+-#if defined(TEST)
+-	// Don't touch -- used by grading script!
+-	ENV_CREATE(TEST, ENV_TYPE_USER);
+-#else
+-	// Touch all you want.
+-	ENV_CREATE(user_hello, ENV_TYPE_USER);
+-#endif // TEST*
+-
+-	// We only have one user environment for now, so just run it.
+-	env_run(&envs[0]);
++	// Drop into the kernel monitor.
++	while (1)
++		monitor(NULL);
+ }
+ 
+ 
+diff --git a/kern/kdebug.c b/kern/kdebug.c
+index 4a2df81..0da50b9 100755
+--- a/kern/kdebug.c
++++ b/kern/kdebug.c
+@@ -4,21 +4,12 @@
+ #include <inc/assert.h>
+ 
+ #include <kern/kdebug.h>
+-#include <kern/pmap.h>
+-#include <kern/env.h>
+ 
+ extern const struct Stab __STAB_BEGIN__[];  // Beginning of stabs table
+ extern const struct Stab __STAB_END__[];    // End of stabs table
+ extern const char __STABSTR_BEGIN__[];      // Beginning of string table
+ extern const char __STABSTR_END__[];        // End of string table
+ 
+-struct UserStabData {
+-	const struct Stab *stabs;
+-	const struct Stab *stab_end;
+-	const char *stabstr;
+-	const char *stabstr_end;
+-};
+-
+ 
+ // stab_binsearch(stabs, region_left, region_right, type, addr)
+ //
+@@ -135,25 +126,8 @@ debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info)
+ 		stabstr = __STABSTR_BEGIN__;
+ 		stabstr_end = __STABSTR_END__;
+ 	} else {
+-		// The user-application linker script, user/user.ld,
+-		// puts information about the application's stabs (equivalent
+-		// to __STAB_BEGIN__, __STAB_END__, __STABSTR_BEGIN__, and
+-		// __STABSTR_END__) in a structure located at virtual address
+-		// USTABDATA.
+-		const struct UserStabData *usd =
+-		        (const struct UserStabData *) USTABDATA;
+-
+-		// Make sure this memory is valid.
+-		// Return -1 if it is not.  Hint: Call user_mem_check.
+-		// LAB 3: Your code here.
+-
+-		stabs = usd->stabs;
+-		stab_end = usd->stab_end;
+-		stabstr = usd->stabstr;
+-		stabstr_end = usd->stabstr_end;
+-
+-		// Make sure the STABS and string table memory is valid.
+-		// LAB 3: Your code here.
++		// Can't search for user-level addresses yet!
++		panic("User address");
+ 	}
+ 
+ 	// String table validity checks
+diff --git a/kern/monitor.c b/kern/monitor.c
+index 4e00796..e137e92 100755
+--- a/kern/monitor.c
++++ b/kern/monitor.c
+@@ -10,7 +10,6 @@
+ #include <kern/console.h>
+ #include <kern/monitor.h>
+ #include <kern/kdebug.h>
+-#include <kern/trap.h>
+ 
+ #define CMDBUF_SIZE	80	// enough for one VGA text line
+ 
+@@ -116,8 +115,6 @@ monitor(struct Trapframe *tf)
+ 	cprintf("Welcome to the JOS kernel monitor!\n");
+ 	cprintf("Type 'help' for a list of commands.\n");
+ 
+-	if (tf != NULL)
+-		print_trapframe(tf);
+ 
+ 	while (1) {
+ 		buf = readline("K> ");
+diff --git a/kern/pmap.c b/kern/pmap.c
+index 2ebeb1e..472b473 100644
+--- a/kern/pmap.c
++++ b/kern/pmap.c
+@@ -8,7 +8,6 @@
+ 
+ #include <kern/pmap.h>
+ #include <kern/kclock.h>
+-#include <kern/env.h>
+ 
+ // These variables are set by i386_detect_memory()
+ size_t npages;                 // Amount of physical memory (in pages)
+@@ -163,12 +162,6 @@ mem_init(void)
+ 	pages = (struct PageInfo *) boot_alloc(npages * sizeof(struct PageInfo));
+ 	memset(pages, 0x00, npages * sizeof(struct PageInfo));
+ 	//////////////////////////////////////////////////////////////////////
+-	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
+-	// LAB 3: Your code here.
+-
+-	envs = (struct Env *) boot_alloc(NENV * sizeof(struct Env));
+-	memset(envs, 0x00, NENV * sizeof(struct Env));
+-	//////////////////////////////////////////////////////////////////////
+ 	// Now that we've allocated the initial kernel data structures, we set
+ 	// up the list of free physical pages. Once we've done so, all further
+ 	// memory management will go through the page_* functions. In
+@@ -202,18 +195,8 @@ mem_init(void)
+ 	//      (ie. perm = PTE_U | PTE_P)
+ 	//    - pages itself -- kernel RW, user NONE
+ 	// Your code goes here:
+-	size_t pagesSize = ROUNDUP((npages * sizeof(struct PageInfo)), PGSIZE);
+-	boot_map_region(kern_pgdir, UPAGES, pagesSize, PADDR(pages), PTE_U);
+-
+-	//////////////////////////////////////////////////////////////////////
+-	// Map the 'envs' array read-only by the user at linear address UENVS
+-	// (ie. perm = PTE_U | PTE_P).
+-	// Permissions:
+-	//    - the new image at UENVS  -- kernel R, user R
+-	//    - envs itself -- kernel RW, user NONE
+-	// LAB 3: Your code here.
+-	size_t envsSize = ROUNDUP(NENV * sizeof(struct Env), PGSIZE);
+-	boot_map_region(kern_pgdir, UENVS, envsSize, PADDR(envs), PTE_U);
++	size_t pageSize = ROUNDUP((npages * sizeof(struct PageInfo)), PGSIZE);
++	boot_map_region(kern_pgdir, UPAGES, pageSize, PADDR(pages), PTE_U);
+ 
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Use the physical memory that 'bootstack' refers to as the kernel
+@@ -652,76 +635,6 @@ tlb_invalidate(pde_t *pgdir, void *va)
+ 	invlpg(va);
+ }
+ 
+-static uintptr_t user_mem_check_addr;
+-
+-//
+-// Check that an environment is allowed to access the range of memory
+-// [va, va+len) with permissions 'perm | PTE_P'.
+-// Normally 'perm' will contain PTE_U at least, but this is not required.
+-// 'va' and 'len' need not be page-aligned; you must test every page that
+-// contains any of that range.  You will test either 'len/PGSIZE',
+-// 'len/PGSIZE + 1', or 'len/PGSIZE + 2' pages.
+-//
+-// A user program can access a virtual address if (1) the address is below
+-// ULIM, and (2) the page table gives it permission.  These are exactly
+-// the tests you should implement here.
+-//
+-// If there is an error, set the 'user_mem_check_addr' variable to the first
+-// erroneous virtual address.
+-//
+-// Returns 0 if the user program can access this range of addresses,
+-// and -E_FAULT otherwise.
+-//
+-int
+-user_mem_check(struct Env *env, const void *va, size_t len, int perm)
+-{
+-	// LAB 3: Your code here.
+-
+-	int permWithP = (perm | PTE_P);
+-
+-	// Check va permissions
+-	pte_t *pte = pgdir_walk(env->env_pgdir, (void *) va, 0);
+-	if (pte == NULL || (PGOFF(*pte) & permWithP) == 0 ||
+-	    (uint32_t) va >= ULIM) {
+-		user_mem_check_addr = (uintptr_t) va;
+-		return -E_FAULT;
+-	}
+-
+-	uint32_t start = ROUNDDOWN((uint32_t) va, PGSIZE) + PGSIZE;
+-	uint32_t end = ROUNDUP((uint32_t) va + len, PGSIZE);
+-
+-	for (uint32_t current = start; current < end; current += PGSIZE) {
+-		pte = pgdir_walk(env->env_pgdir, (void *) current, 0);
+-
+-		if (pte == NULL || (PGOFF(*pte) & permWithP) == 0 ||
+-		    (uint32_t) current >= ULIM) {
+-			user_mem_check_addr = (uintptr_t) current;
+-			return -E_FAULT;
+-		}
+-	}
+-	return 0;
+-}
+-
+-
+-//
+-// Checks that environment 'env' is allowed to access the range
+-// of memory [va, va+len) with permissions 'perm | PTE_U | PTE_P'.
+-// If it can, then the function simply returns.
+-// If it cannot, 'env' is destroyed and, if env is the current
+-// environment, this function will not return.
+-//
+-void
+-user_mem_assert(struct Env *env, const void *va, size_t len, int perm)
+-{
+-	if (user_mem_check(env, va, len, perm | PTE_U) < 0) {
+-		cprintf("[%08x] user_mem_check assertion failure for "
+-		        "va %08x\n",
+-		        env->env_id,
+-		        user_mem_check_addr);
+-		env_destroy(env);  // may not return
+-	}
+-}
+-
+ 
+ // --------------------------------------------------------------
+ // Checking functions.
+@@ -882,14 +795,9 @@ check_kern_pgdir(void)
+ 	pgdir = kern_pgdir;
+ 	// check pages array
+ 	n = ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE);
+-	for (i = 0; i < n; i += PGSIZE)
++	for (i = 0; i < n; i += PGSIZE) {
+ 		assert(check_va2pa(pgdir, UPAGES + i) == PADDR(pages) + i);
+-
+-	// check envs array (new test for lab 3)
+-	n = ROUNDUP(NENV * sizeof(struct Env), PGSIZE);
+-	for (i = 0; i < n; i += PGSIZE)
+-		assert(check_va2pa(pgdir, UENVS + i) == PADDR(envs) + i);
+-
++	}
+ 
+ 	// check phys mem
+ 	for (i = 0; i < npages * PGSIZE; i += PGSIZE)
+@@ -907,7 +815,6 @@ check_kern_pgdir(void)
+ 		case PDX(UVPT):
+ 		case PDX(KSTACKTOP - 1):
+ 		case PDX(UPAGES):
+-		case PDX(UENVS):
+ 			assert(pgdir[i] & PTE_P);
+ 			break;
+ 		default:
+diff --git a/kern/pmap.h b/kern/pmap.h
+index ab0bee9..950cca1 100755
+--- a/kern/pmap.h
++++ b/kern/pmap.h
+@@ -8,7 +8,6 @@
+ 
+ #include <inc/memlayout.h>
+ #include <inc/assert.h>
+-struct Env;
+ 
+ extern char bootstacktop[], bootstack[];
+ 
+@@ -63,9 +62,6 @@ void	page_decref(struct PageInfo *pp);
+ 
+ void	tlb_invalidate(pde_t *pgdir, void *va);
+ 
+-int	user_mem_check(struct Env *env, const void *va, size_t len, int perm);
+-void	user_mem_assert(struct Env *env, const void *va, size_t len, int perm);
+-
+ static inline physaddr_t
+ page2pa(struct PageInfo *pp)
+ {
+diff --git a/kern/syscall.c b/kern/syscall.c
+deleted file mode 100644
+index 3c1e498..0000000
+--- a/kern/syscall.c
++++ /dev/null
+@@ -1,88 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#include <inc/x86.h>
+-#include <inc/error.h>
+-#include <inc/string.h>
+-#include <inc/assert.h>
+-
+-#include <kern/env.h>
+-#include <kern/pmap.h>
+-#include <kern/trap.h>
+-#include <kern/syscall.h>
+-#include <kern/console.h>
+-
+-// Print a string to the system console.
+-// The string is exactly 'len' characters long.
+-// Destroys the environment on memory errors.
+-static void
+-sys_cputs(const char *s, size_t len)
+-{
+-	// Check that the user has permission to read memory [s, s+len).
+-	// Destroy the environment if not.
+-
+-	// LAB 3: Your code here.
+-	user_mem_assert(curenv, s, len, PTE_U | PTE_P);
+-
+-	// Print the string supplied by the user.
+-	cprintf("%.*s", len, s);
+-}
+-
+-// Read a character from the system console without blocking.
+-// Returns the character, or 0 if there is no input waiting.
+-static int
+-sys_cgetc(void)
+-{
+-	return cons_getc();
+-}
+-
+-// Returns the current environment's envid.
+-static envid_t
+-sys_getenvid(void)
+-{
+-	return curenv->env_id;
+-}
+-
+-// Destroy a given environment (possibly the currently running environment).
+-//
+-// Returns 0 on success, < 0 on error.  Errors are:
+-//	-E_BAD_ENV if environment envid doesn't currently exist,
+-//		or the caller doesn't have permission to change envid.
+-static int
+-sys_env_destroy(envid_t envid)
+-{
+-	int r;
+-	struct Env *e;
+-
+-	if ((r = envid2env(envid, &e, 1)) < 0)
+-		return r;
+-	if (e == curenv)
+-		cprintf("[%08x] exiting gracefully\n", curenv->env_id);
+-	else
+-		cprintf("[%08x] destroying %08x\n", curenv->env_id, e->env_id);
+-	env_destroy(e);
+-	return 0;
+-}
+-
+-// Dispatches to the correct kernel function, passing the arguments.
+-int32_t
+-syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+-{
+-	// Call the function corresponding to the 'syscallno' parameter.
+-	// Return any appropriate return value.
+-	// LAB 3: Your code here.
+-
+-	switch (syscallno) {
+-	case SYS_cputs:
+-		sys_cputs((char *) a1, a2);
+-		return 0;
+-	case SYS_getenvid:
+-		return sys_getenvid();
+-	case SYS_cgetc:
+-		return sys_cgetc();
+-	case SYS_env_destroy:
+-		return sys_env_destroy(a1);
+-	default:
+-		return -E_INVAL;
+-	}
+-	return -E_INVAL;
+-}
+diff --git a/kern/syscall.h b/kern/syscall.h
+deleted file mode 100644
+index e370801..0000000
+--- a/kern/syscall.h
++++ /dev/null
+@@ -1,11 +0,0 @@
+-#ifndef JOS_KERN_SYSCALL_H
+-#define JOS_KERN_SYSCALL_H
+-#ifndef JOS_KERNEL
+-# error "This is a JOS kernel header; user programs should not #include it"
+-#endif
+-
+-#include <inc/syscall.h>
+-
+-int32_t syscall(uint32_t num, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5);
+-
+-#endif /* !JOS_KERN_SYSCALL_H */
+diff --git a/kern/trap.c b/kern/trap.c
+deleted file mode 100644
+index 68cfd0b..0000000
+--- a/kern/trap.c
++++ /dev/null
+@@ -1,251 +0,0 @@
+-#include <inc/mmu.h>
+-#include <inc/x86.h>
+-#include <inc/assert.h>
+-
+-#include <kern/pmap.h>
+-#include <kern/trap.h>
+-#include <kern/console.h>
+-#include <kern/monitor.h>
+-#include <kern/env.h>
+-#include <kern/syscall.h>
+-
+-static struct Taskstate ts;
+-
+-/* For debugging, so print_trapframe can distinguish between printing
+- * a saved trapframe and printing the current trapframe and print some
+- * additional information in the latter case.
+- */
+-static struct Trapframe *last_tf;
+-
+-/* Interrupt descriptor table.  (Must be built at run time because
+- * shifted function addresses can't be represented in relocation records.)
+- */
+-struct Gatedesc idt[256] = { { 0 } };
+-struct Pseudodesc idt_pd = { sizeof(idt) - 1, (uint32_t) idt };
+-
+-
+-static const char *
+-trapname(int trapno)
+-{
+-	static const char *const excnames[] = {
+-		"Divide error",
+-		"Debug",
+-		"Non-Maskable Interrupt",
+-		"Breakpoint",
+-		"Overflow",
+-		"BOUND Range Exceeded",
+-		"Invalid Opcode",
+-		"Device Not Available",
+-		"Double Fault",
+-		"Coprocessor Segment Overrun",
+-		"Invalid TSS",
+-		"Segment Not Present",
+-		"Stack Fault",
+-		"General Protection",
+-		"Page Fault",
+-		"(unknown trap)",
+-		"x87 FPU Floating-Point Error",
+-		"Alignment Check",
+-		"Machine-Check",
+-		"SIMD Floating-Point Exception"
+-	};
+-
+-	if (trapno < ARRAY_SIZE(excnames))
+-		return excnames[trapno];
+-	if (trapno == T_SYSCALL)
+-		return "System call";
+-	return "(unknown trap)";
+-}
+-
+-void trap_divzero();
+-void trap_pagefault();
+-void trap_generalfault();
+-void trap_syscall();
+-void trap_breakpoint();
+-void
+-trap_init(void)
+-{
+-	extern struct Segdesc gdt[];
+-
+-	// LAB 3: Your code here.
+-	SETGATE(idt[T_DIVIDE], 1, GD_KT, trap_divzero, 0);
+-	SETGATE(idt[T_GPFLT], 1, GD_KT, trap_generalfault, 0);
+-	SETGATE(idt[T_PGFLT], 1, GD_KT, trap_pagefault, 0);
+-	SETGATE(idt[T_BRKPT], 1, GD_KT, trap_breakpoint, 3);
+-	SETGATE(idt[T_SYSCALL], 1, GD_KT, trap_syscall, 3);
+-
+-	// Per-CPU setup
+-	trap_init_percpu();
+-}
+-
+-// Initialize and load the per-CPU TSS and IDT
+-void
+-trap_init_percpu(void)
+-{
+-	// Setup a TSS so that we get the right stack
+-	// when we trap to the kernel.
+-	ts.ts_esp0 = KSTACKTOP;
+-	ts.ts_ss0 = GD_KD;
+-
+-	// Initialize the TSS slot of the gdt.
+-	gdt[GD_TSS0 >> 3] =
+-	        SEG16(STS_T32A, (uint32_t)(&ts), sizeof(struct Taskstate) - 1, 0);
+-	gdt[GD_TSS0 >> 3].sd_s = 0;
+-
+-	// Load the TSS selector (like other segment selectors, the
+-	// bottom three bits are special; we leave them 0)
+-	ltr(GD_TSS0);
+-
+-	// Load the IDT
+-	lidt(&idt_pd);
+-}
+-
+-void
+-print_trapframe(struct Trapframe *tf)
+-{
+-	cprintf("TRAP frame at %p\n", tf);
+-	print_regs(&tf->tf_regs);
+-	cprintf("  es   0x----%04x\n", tf->tf_es);
+-	cprintf("  ds   0x----%04x\n", tf->tf_ds);
+-	cprintf("  trap 0x%08x %s\n", tf->tf_trapno, trapname(tf->tf_trapno));
+-	// If this trap was a page fault that just happened
+-	// (so %cr2 is meaningful), print the faulting linear address.
+-	if (tf == last_tf && tf->tf_trapno == T_PGFLT)
+-		cprintf("  cr2  0x%08x\n", rcr2());
+-	cprintf("  err  0x%08x", tf->tf_err);
+-	// For page faults, print decoded fault error code:
+-	// U/K=fault occurred in user/kernel mode
+-	// W/R=a write/read caused the fault
+-	// PR=a protection violation caused the fault (NP=page not present).
+-	if (tf->tf_trapno == T_PGFLT)
+-		cprintf(" [%s, %s, %s]\n",
+-		        tf->tf_err & 4 ? "user" : "kernel",
+-		        tf->tf_err & 2 ? "write" : "read",
+-		        tf->tf_err & 1 ? "protection" : "not-present");
+-	else
+-		cprintf("\n");
+-	cprintf("  eip  0x%08x\n", tf->tf_eip);
+-	cprintf("  cs   0x----%04x\n", tf->tf_cs);
+-	cprintf("  flag 0x%08x\n", tf->tf_eflags);
+-	if ((tf->tf_cs & 3) != 0) {
+-		cprintf("  esp  0x%08x\n", tf->tf_esp);
+-		cprintf("  ss   0x----%04x\n", tf->tf_ss);
+-	}
+-}
+-
+-void
+-print_regs(struct PushRegs *regs)
+-{
+-	cprintf("  edi  0x%08x\n", regs->reg_edi);
+-	cprintf("  esi  0x%08x\n", regs->reg_esi);
+-	cprintf("  ebp  0x%08x\n", regs->reg_ebp);
+-	cprintf("  oesp 0x%08x\n", regs->reg_oesp);
+-	cprintf("  ebx  0x%08x\n", regs->reg_ebx);
+-	cprintf("  edx  0x%08x\n", regs->reg_edx);
+-	cprintf("  ecx  0x%08x\n", regs->reg_ecx);
+-	cprintf("  eax  0x%08x\n", regs->reg_eax);
+-}
+-
+-static void
+-trap_dispatch(struct Trapframe *tf)
+-{
+-	// Handle processor exceptions.
+-	// LAB 3: Your code here.
+-	switch (tf->tf_trapno) {
+-	case T_BRKPT:
+-		print_trapframe(tf);
+-		monitor(tf);
+-		return;
+-	case T_PGFLT:
+-		page_fault_handler(tf);
+-		return;
+-	case T_SYSCALL:
+-		/*
+-		pass system call number in AX, up to five parameters in DX, CX,
+-		BX, DI, SI
+-		*/
+-		tf->tf_regs.reg_eax = syscall(tf->tf_regs.reg_eax,
+-		                              tf->tf_regs.reg_edx,
+-		                              tf->tf_regs.reg_ecx,
+-		                              tf->tf_regs.reg_ebx,
+-		                              tf->tf_regs.reg_edi,
+-		                              tf->tf_regs.reg_esi);
+-		return;
+-	default:
+-		// Unexpected trap: The user process or the kernel has a bug.
+-		print_trapframe(tf);
+-		if (tf->tf_cs == GD_KT) {
+-			panic("unhandled trap in kernel");
+-		} else {
+-			env_destroy(curenv);
+-			return;
+-		}
+-	}
+-}
+-
+-void
+-trap(struct Trapframe *tf)
+-{
+-	// The environment may have set DF and some versions
+-	// of GCC rely on DF being clear
+-	asm volatile("cld" ::: "cc");
+-
+-	// Check that interrupts are disabled.  If this assertion
+-	// fails, DO NOT be tempted to fix it by inserting a "cli" in
+-	// the interrupt path.
+-	assert(!(read_eflags() & FL_IF));
+-
+-	cprintf("Incoming TRAP frame at %p\n", tf);
+-
+-	if ((tf->tf_cs & 3) == 3) {
+-		// Trapped from user mode.
+-		assert(curenv);
+-
+-		// Copy trap frame (which is currently on the stack)
+-		// into 'curenv->env_tf', so that running the environment
+-		// will restart at the trap point.
+-		curenv->env_tf = *tf;
+-		// The trapframe on the stack should be ignored from here on.
+-		tf = &curenv->env_tf;
+-	}
+-
+-	// Record that tf is the last real trapframe so
+-	// print_trapframe can print some additional information.
+-	last_tf = tf;
+-
+-	// Dispatch based on what type of trap occurred
+-	trap_dispatch(tf);
+-
+-	// Return to the current environment, which should be running.
+-	assert(curenv && curenv->env_status == ENV_RUNNING);
+-	env_run(curenv);
+-}
+-
+-
+-void
+-page_fault_handler(struct Trapframe *tf)
+-{
+-	uint32_t fault_va;
+-
+-	// Read processor's CR2 register to find the faulting address
+-	fault_va = rcr2();
+-
+-	// Handle kernel-mode page faults.
+-
+-	// LAB 3: Your code here.
+-	if ((tf->tf_cs & 3) == 0) {
+-		panic("Kernel out of memory!");
+-	}
+-
+-
+-	// We've already handled kernel-mode exceptions, so if we get here,
+-	// the page fault happened in user mode.
+-
+-	// Destroy the environment that caused the fault.
+-	cprintf("[%08x] user fault va %08x ip %08x\n",
+-	        curenv->env_id,
+-	        fault_va,
+-	        tf->tf_eip);
+-	print_trapframe(tf);
+-	env_destroy(curenv);
+-}
+diff --git a/kern/trap.h b/kern/trap.h
+deleted file mode 100644
+index 36b8758..0000000
+--- a/kern/trap.h
++++ /dev/null
+@@ -1,23 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#ifndef JOS_KERN_TRAP_H
+-#define JOS_KERN_TRAP_H
+-#ifndef JOS_KERNEL
+-# error "This is a JOS kernel header; user programs should not #include it"
+-#endif
+-
+-#include <inc/trap.h>
+-#include <inc/mmu.h>
+-
+-/* The kernel's interrupt descriptor table */
+-extern struct Gatedesc idt[];
+-extern struct Pseudodesc idt_pd;
+-
+-void trap_init(void);
+-void trap_init_percpu(void);
+-void print_regs(struct PushRegs *regs);
+-void print_trapframe(struct Trapframe *tf);
+-void page_fault_handler(struct Trapframe *);
+-void backtrace(struct Trapframe *);
+-
+-#endif /* JOS_KERN_TRAP_H */
+diff --git a/kern/trapentry.S b/kern/trapentry.S
+deleted file mode 100644
+index 2f17c34..0000000
+--- a/kern/trapentry.S
++++ /dev/null
+@@ -1,70 +0,0 @@
+-/* See COPYRIGHT for copyright information. */
+-
+-#include <inc/mmu.h>
+-#include <inc/memlayout.h>
+-#include <inc/trap.h>
+-
+-
+-
+-###################################################################
+-# exceptions/interrupts
+-###################################################################
+-
+-/* TRAPHANDLER defines a globally-visible function for handling a trap.
+- * It pushes a trap number onto the stack, then jumps to _alltraps.
+- * Use TRAPHANDLER for traps where the CPU automatically pushes an error code.
+- *
+- * You shouldn't call a TRAPHANDLER function from C, but you may
+- * need to _declare_ one in C (for instance, to get a function pointer
+- * during IDT setup).  You can declare the function with
+- *   void NAME();
+- * where NAME is the argument passed to TRAPHANDLER.
+- */
+-#define TRAPHANDLER(name, num)						\
+-	.globl name;		/* define global symbol for 'name' */	\
+-	.type name, @function;	/* symbol type is function */		\
+-	.align 2;		/* align function definition */		\
+-	name:			/* function starts here */		\
+-	pushl $(num);							\
+-	jmp _alltraps
+-
+-/* Use TRAPHANDLER_NOEC for traps where the CPU doesn't push an error code.
+- * It pushes a 0 in place of the error code, so the trap frame has the same
+- * format in either case.
+- */
+-#define TRAPHANDLER_NOEC(name, num)					\
+-	.globl name;							\
+-	.type name, @function;						\
+-	.align 2;							\
+-	name:								\
+-	pushl $0;							\
+-	pushl $(num);							\
+-	jmp _alltraps
+-
+-/*
+- * Lab 3: Your code here for generating entry points for the different traps.
+- */
+-
+-.text
+-TRAPHANDLER_NOEC(trap_divzero, T_DIVIDE);
+-TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
+-TRAPHANDLER(trap_generalfault, T_GPFLT);
+-TRAPHANDLER(trap_pagefault, T_PGFLT);
+-TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
+-
+-/*
+- * Lab 3: Your code here for _alltraps
+- */
+-.global _alltraps
+-_alltraps:
+-	
+-	pushl %ds
+-	pushl %es
+-	pushal
+-
+-	movl $GD_KD, %eax
+-	movw %ax, %ds
+-	movw %ax, %es
+-
+-	pushl %esp
+-	call trap
+\ No newline at end of file
+diff --git a/lib/Makefrag b/lib/Makefrag
+deleted file mode 100644
+index 2f80706..0000000
+--- a/lib/Makefrag
++++ /dev/null
+@@ -1,31 +0,0 @@
+-OBJDIRS += lib
+-
+-LIB_SRCFILES :=		lib/console.c \
+-			lib/libmain.c \
+-			lib/exit.c \
+-			lib/panic.c \
+-			lib/printf.c \
+-			lib/printfmt.c \
+-			lib/readline.c \
+-			lib/string.c \
+-			lib/syscall.c
+-
+-
+-
+-
+-LIB_OBJFILES := $(patsubst lib/%.c, $(OBJDIR)/lib/%.o, $(LIB_SRCFILES))
+-LIB_OBJFILES := $(patsubst lib/%.S, $(OBJDIR)/lib/%.o, $(LIB_OBJFILES))
+-
+-$(OBJDIR)/lib/%.o: lib/%.c $(OBJDIR)/.vars.USER_CFLAGS
+-	@echo + cc[USER] $<
+-	@mkdir -p $(@D)
+-	$(V)$(CC) -nostdinc $(USER_CFLAGS) -c -o $@ $<
+-
+-$(OBJDIR)/lib/%.o: lib/%.S $(OBJDIR)/.vars.USER_CFLAGS
+-	@echo + as[USER] $<
+-	@mkdir -p $(@D)
+-	$(V)$(CC) -nostdinc $(USER_CFLAGS) -c -o $@ $<
+-
+-$(OBJDIR)/lib/libjos.a: $(LIB_OBJFILES)
+-	@echo + ar $@
+-	$(V)$(AR) r $@ $(LIB_OBJFILES)
+diff --git a/lib/console.c b/lib/console.c
+deleted file mode 100644
+index 8856873..0000000
+--- a/lib/console.c
++++ /dev/null
+@@ -1,25 +0,0 @@
+-
+-#include <inc/string.h>
+-#include <inc/lib.h>
+-
+-void
+-cputchar(int ch)
+-{
+-	char c = ch;
+-
+-	// Unlike standard Unix's putchar,
+-	// the cputchar function _always_ outputs to the system console.
+-	sys_cputs(&c, 1);
+-}
+-
+-int
+-getchar(void)
+-{
+-	int r;
+-	// sys_cgetc does not block, but getchar should.
+-	while ((r = sys_cgetc()) == 0)
+-		;
+-	return r;
+-}
+-
+-
+diff --git a/lib/entry.S b/lib/entry.S
+deleted file mode 100644
+index 222d16c..0000000
+--- a/lib/entry.S
++++ /dev/null
+@@ -1,35 +0,0 @@
+-#include <inc/mmu.h>
+-#include <inc/memlayout.h>
+-
+-.data
+-// Define the global symbols 'envs', 'pages', 'uvpt', and 'uvpd'
+-// so that they can be used in C as if they were ordinary global arrays.
+-	.globl envs
+-	.set envs, UENVS
+-	.globl pages
+-	.set pages, UPAGES
+-	.globl uvpt
+-	.set uvpt, UVPT
+-	.globl uvpd
+-	.set uvpd, (UVPT+(UVPT>>12)*4)
+-
+-
+-// Entrypoint - this is where the kernel (or our parent environment)
+-// starts us running when we are initially loaded into a new environment.
+-.text
+-.globl _start
+-_start:
+-	// See if we were started with arguments on the stack
+-	cmpl $USTACKTOP, %esp
+-	jne args_exist
+-
+-	// If not, push dummy argc/argv arguments.
+-	// This happens when we are loaded by the kernel,
+-	// because the kernel does not know about passing arguments.
+-	pushl $0
+-	pushl $0
+-
+-args_exist:
+-	call libmain
+-1:	jmp 1b
+-
+diff --git a/lib/exit.c b/lib/exit.c
+deleted file mode 100644
+index 85c64d6..0000000
+--- a/lib/exit.c
++++ /dev/null
+@@ -1,9 +0,0 @@
+-
+-#include <inc/lib.h>
+-
+-void
+-exit(void)
+-{
+-	sys_env_destroy(0);
+-}
+-
+diff --git a/lib/libmain.c b/lib/libmain.c
+deleted file mode 100644
+index 834edf8..0000000
+--- a/lib/libmain.c
++++ /dev/null
+@@ -1,27 +0,0 @@
+-// Called from entry.S to get us going.
+-// entry.S already took care of defining envs, pages, uvpd, and uvpt.
+-
+-#include <inc/lib.h>
+-
+-extern void umain(int argc, char **argv);
+-
+-const volatile struct Env *thisenv;
+-const char *binaryname = "<unknown>";
+-
+-void
+-libmain(int argc, char **argv)
+-{
+-	// set thisenv to point at our Env structure in envs[].
+-	// LAB 3: Your code here.
+-	thisenv = 0;
+-
+-	// save the name of the program so that panic() can use it
+-	if (argc > 0)
+-		binaryname = argv[0];
+-
+-	// call user main routine
+-	umain(argc, argv);
+-
+-	// exit gracefully
+-	exit();
+-}
+diff --git a/lib/panic.c b/lib/panic.c
+deleted file mode 100644
+index 8d76788..0000000
+--- a/lib/panic.c
++++ /dev/null
+@@ -1,26 +0,0 @@
+-
+-#include <inc/lib.h>
+-
+-/*
+- * Panic is called on unresolvable fatal errors.
+- * It prints "panic: <message>", then causes a breakpoint exception,
+- * which causes JOS to enter the JOS kernel monitor.
+- */
+-void
+-_panic(const char *file, int line, const char *fmt, ...)
+-{
+-	va_list ap;
+-
+-	va_start(ap, fmt);
+-
+-	// Print the panic message
+-	cprintf("[%08x] user panic in %s at %s:%d: ",
+-		sys_getenvid(), binaryname, file, line);
+-	vcprintf(fmt, ap);
+-	cprintf("\n");
+-
+-	// Cause a breakpoint exception
+-	while (1)
+-		asm volatile("int3");
+-}
+-
+diff --git a/lib/printf.c b/lib/printf.c
+deleted file mode 100644
+index 3923b10..0000000
+--- a/lib/printf.c
++++ /dev/null
+@@ -1,62 +0,0 @@
+-// Implementation of cprintf console output for user environments,
+-// based on printfmt() and the sys_cputs() system call.
+-//
+-// cprintf is a debugging statement, not a generic output statement.
+-// It is very important that it always go to the console, especially when
+-// debugging file descriptor code!
+-
+-#include <inc/types.h>
+-#include <inc/stdio.h>
+-#include <inc/stdarg.h>
+-#include <inc/lib.h>
+-
+-
+-// Collect up to 256 characters into a buffer
+-// and perform ONE system call to print all of them,
+-// in order to make the lines output to the console atomic
+-// and prevent interrupts from causing context switches
+-// in the middle of a console output line and such.
+-struct printbuf {
+-	int idx;	// current buffer index
+-	int cnt;	// total bytes printed so far
+-	char buf[256];
+-};
+-
+-
+-static void
+-putch(int ch, struct printbuf *b)
+-{
+-	b->buf[b->idx++] = ch;
+-	if (b->idx == 256-1) {
+-		sys_cputs(b->buf, b->idx);
+-		b->idx = 0;
+-	}
+-	b->cnt++;
+-}
+-
+-int
+-vcprintf(const char *fmt, va_list ap)
+-{
+-	struct printbuf b;
+-
+-	b.idx = 0;
+-	b.cnt = 0;
+-	vprintfmt((void*)putch, &b, fmt, ap);
+-	sys_cputs(b.buf, b.idx);
+-
+-	return b.cnt;
+-}
+-
+-int
+-cprintf(const char *fmt, ...)
+-{
+-	va_list ap;
+-	int cnt;
+-
+-	va_start(ap, fmt);
+-	cnt = vcprintf(fmt, ap);
+-	va_end(ap);
+-
+-	return cnt;
+-}
+-
+diff --git a/lib/syscall.c b/lib/syscall.c
+deleted file mode 100644
+index 8d28dda..0000000
+--- a/lib/syscall.c
++++ /dev/null
+@@ -1,63 +0,0 @@
+-// System call stubs.
+-
+-#include <inc/syscall.h>
+-#include <inc/lib.h>
+-
+-static inline int32_t
+-syscall(int num, int check, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+-{
+-	int32_t ret;
+-
+-	// Generic system call: pass system call number in AX,
+-	// up to five parameters in DX, CX, BX, DI, SI.
+-	// Interrupt kernel with T_SYSCALL.
+-	//
+-	// The "volatile" tells the assembler not to optimize
+-	// this instruction away just because we don't use the
+-	// return value.
+-	//
+-	// The last clause tells the assembler that this can
+-	// potentially change the condition codes and arbitrary
+-	// memory locations.
+-
+-	asm volatile("int %1\n"
+-		     : "=a" (ret)
+-		     : "i" (T_SYSCALL),
+-		       "a" (num),
+-		       "d" (a1),
+-		       "c" (a2),
+-		       "b" (a3),
+-		       "D" (a4),
+-		       "S" (a5)
+-		     : "cc", "memory");
+-
+-	if(check && ret > 0)
+-		panic("syscall %d returned %d (> 0)", num, ret);
+-
+-	return ret;
+-}
+-
+-void
+-sys_cputs(const char *s, size_t len)
+-{
+-	syscall(SYS_cputs, 0, (uint32_t)s, len, 0, 0, 0);
+-}
+-
+-int
+-sys_cgetc(void)
+-{
+-	return syscall(SYS_cgetc, 0, 0, 0, 0, 0, 0);
+-}
+-
+-int
+-sys_env_destroy(envid_t envid)
+-{
+-	return syscall(SYS_env_destroy, 1, envid, 0, 0, 0, 0);
+-}
+-
+-envid_t
+-sys_getenvid(void)
+-{
+-	 return syscall(SYS_getenvid, 0, 0, 0, 0, 0, 0);
+-}
+-
+diff --git a/user/Makefrag b/user/Makefrag
+deleted file mode 100644
+index a9ebd8d..0000000
+--- a/user/Makefrag
++++ /dev/null
+@@ -1,16 +0,0 @@
+-OBJDIRS += user
+-
+-
+-USERLIBS += jos
+-
+-$(OBJDIR)/user/%.o: user/%.c $(OBJDIR)/.vars.USER_CFLAGS
+-	@echo + cc[USER] $<
+-	@mkdir -p $(@D)
+-	$(V)$(CC) -nostdinc $(USER_CFLAGS) -c -o $@ $<
+-
+-$(OBJDIR)/user/%: $(OBJDIR)/user/%.o $(OBJDIR)/lib/entry.o $(USERLIBS:%=$(OBJDIR)/lib/lib%.a) user/user.ld
+-	@echo + ld $@
+-	$(V)$(LD) -o $@ $(ULDFLAGS) $(LDFLAGS) -nostdlib $(OBJDIR)/lib/entry.o $@.o -L$(OBJDIR)/lib $(USERLIBS:%=-l%) $(GCC_LIB)
+-	$(V)$(OBJDUMP) -S $@ > $@.asm
+-	$(V)$(NM) -n $@ > $@.sym
+-
+diff --git a/user/badsegment.c b/user/badsegment.c
+deleted file mode 100644
+index 1dc74af..0000000
+--- a/user/badsegment.c
++++ /dev/null
+@@ -1,11 +0,0 @@
+-// program to cause a general protection exception
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	// Try to load the kernel's TSS selector into the DS register.
+-	asm volatile("movw $0x28,%ax; movw %ax,%ds");
+-}
+-
+diff --git a/user/breakpoint.c b/user/breakpoint.c
+deleted file mode 100644
+index 47e4cb2..0000000
+--- a/user/breakpoint.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// program to cause a breakpoint trap
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	asm volatile("int $3");
+-}
+-
+diff --git a/user/buggyhello.c b/user/buggyhello.c
+deleted file mode 100644
+index 1ca1b7b..0000000
+--- a/user/buggyhello.c
++++ /dev/null
+@@ -1,11 +0,0 @@
+-// buggy hello world -- unmapped pointer passed to kernel
+-// kernel should destroy user environment in response
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	sys_cputs((char*)1, 1);
+-}
+-
+diff --git a/user/buggyhello2.c b/user/buggyhello2.c
+deleted file mode 100644
+index 0f15702..0000000
+--- a/user/buggyhello2.c
++++ /dev/null
+@@ -1,13 +0,0 @@
+-// buggy hello world 2 -- pointed-to region extends into unmapped memory
+-// kernel should destroy user environment in response
+-
+-#include <inc/lib.h>
+-
+-const char *hello = "hello, world\n";
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	sys_cputs(hello, 1024*1024);
+-}
+-
+diff --git a/user/divzero.c b/user/divzero.c
+deleted file mode 100644
+index ca379e2..0000000
+--- a/user/divzero.c
++++ /dev/null
+@@ -1,13 +0,0 @@
+-// buggy program - causes a divide by zero exception
+-
+-#include <inc/lib.h>
+-
+-int zero;
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	zero = 0;
+-	cprintf("1/0 is %08x!\n", 1/zero);
+-}
+-
+diff --git a/user/evilhello.c b/user/evilhello.c
+deleted file mode 100644
+index 633c358..0000000
+--- a/user/evilhello.c
++++ /dev/null
+@@ -1,12 +0,0 @@
+-// evil hello world -- kernel pointer passed to kernel
+-// kernel should destroy user environment in response
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	// try to print the kernel entry point as a string!  mua ha ha!
+-	sys_cputs((char*)0xf010000c, 1);
+-}
+-
+diff --git a/user/faultread.c b/user/faultread.c
+deleted file mode 100644
+index b76902f..0000000
+--- a/user/faultread.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// buggy program - faults with a read from location zero
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	cprintf("I read %08x from location 0!\n", *(unsigned*)0);
+-}
+-
+diff --git a/user/faultreadkernel.c b/user/faultreadkernel.c
+deleted file mode 100644
+index 79057a1..0000000
+--- a/user/faultreadkernel.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// buggy program - faults with a read from kernel space
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	cprintf("I read %08x from location 0xf0100000!\n", *(unsigned*)0xf0100000);
+-}
+-
+diff --git a/user/faultwrite.c b/user/faultwrite.c
+deleted file mode 100644
+index b8512f5..0000000
+--- a/user/faultwrite.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// buggy program - faults with a write to location zero
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	*(unsigned*)0 = 0;
+-}
+-
+diff --git a/user/faultwritekernel.c b/user/faultwritekernel.c
+deleted file mode 100644
+index fbcc32f..0000000
+--- a/user/faultwritekernel.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// buggy program - faults with a write to a kernel location
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	*(unsigned*)0xf0100000 = 0;
+-}
+-
+diff --git a/user/hello.c b/user/hello.c
+deleted file mode 100644
+index 2e77b03..0000000
+--- a/user/hello.c
++++ /dev/null
+@@ -1,9 +0,0 @@
+-// hello, world
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	cprintf("hello, world\n");
+-	cprintf("i am environment %08x\n", sys_getenvid());
+-}
+diff --git a/user/our_evilhello.c b/user/our_evilhello.c
+deleted file mode 100644
+index 78b1282..0000000
+--- a/user/our_evilhello.c
++++ /dev/null
+@@ -1,9 +0,0 @@
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-    char *entry = (char *) 0xf010000c;
+-    char first = *entry;
+-    sys_cputs(&first, 1);
+-}
+\ No newline at end of file
+diff --git a/user/softint.c b/user/softint.c
+deleted file mode 100644
+index cd8d3b5..0000000
+--- a/user/softint.c
++++ /dev/null
+@@ -1,10 +0,0 @@
+-// buggy program - causes an illegal software interrupt
+-
+-#include <inc/lib.h>
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	asm volatile("int $14");	// page fault
+-}
+-
+diff --git a/user/testbss.c b/user/testbss.c
+deleted file mode 100644
+index 2f8ee8e..0000000
+--- a/user/testbss.c
++++ /dev/null
+@@ -1,27 +0,0 @@
+-// test reads and writes to a large bss
+-
+-#include <inc/lib.h>
+-
+-#define ARRAYSIZE (1024*1024)
+-
+-uint32_t bigarray[ARRAYSIZE];
+-
+-void
+-umain(int argc, char **argv)
+-{
+-	int i;
+-
+-	cprintf("Making sure bss works right...\n");
+-	for (i = 0; i < ARRAYSIZE; i++)
+-		if (bigarray[i] != 0)
+-			panic("bigarray[%d] isn't cleared!\n", i);
+-	for (i = 0; i < ARRAYSIZE; i++)
+-		bigarray[i] = i;
+-	for (i = 0; i < ARRAYSIZE; i++)
+-		if (bigarray[i] != i)
+-			panic("bigarray[%d] didn't hold its value!\n", i);
+-
+-	cprintf("Yes, good.  Now doing a wild write off the end...\n");
+-	bigarray[ARRAYSIZE+1024] = 0;
+-	panic("SHOULD HAVE TRAPPED!!!");
+-}
+diff --git a/user/user.ld b/user/user.ld
+deleted file mode 100644
+index 1902ae3..0000000
+--- a/user/user.ld
++++ /dev/null
+@@ -1,72 +0,0 @@
+-/* Simple linker script for JOS user-level programs.
+-   See the GNU ld 'info' manual ("info ld") to learn the syntax. */
+-
+-OUTPUT_FORMAT("elf32-i386", "elf32-i386", "elf32-i386")
+-OUTPUT_ARCH(i386)
+-ENTRY(_start)
+-
+-SECTIONS
+-{
+-	/* Load programs at this address: "." means the current address */
+-	. = 0x800020;
+-
+-	.text : {
+-		*(.text .stub .text.* .gnu.linkonce.t.*)
+-	}
+-
+-	PROVIDE(etext = .);	/* Define the 'etext' symbol to this value */
+-
+-	.rodata : {
+-		*(.rodata .rodata.* .gnu.linkonce.r.*)
+-	}
+-
+-	/* Adjust the address for the data segment to the next page */
+-	. = ALIGN(0x1000);
+-
+-	.data : {
+-		*(.data)
+-	}
+-
+-	PROVIDE(edata = .);
+-
+-	.bss : {
+-		*(.bss)
+-	}
+-
+-	PROVIDE(end = .);
+-
+-
+-	/* Place debugging symbols so that they can be found by
+-	 * the kernel debugger.
+-	 * Specifically, the four words at 0x200000 mark the beginning of
+-	 * the stabs, the end of the stabs, the beginning of the stabs
+-	 * string table, and the end of the stabs string table, respectively.
+-	 */
+-
+-	.stab_info 0x200000 : {
+-		LONG(__STAB_BEGIN__);
+-		LONG(__STAB_END__);
+-		LONG(__STABSTR_BEGIN__);
+-		LONG(__STABSTR_END__);
+-	}
+-
+-	.stab : {
+-		__STAB_BEGIN__ = DEFINED(__STAB_BEGIN__) ? __STAB_BEGIN__ : .;
+-		*(.stab);
+-		__STAB_END__ = DEFINED(__STAB_END__) ? __STAB_END__ : .;
+-		BYTE(0)		/* Force the linker to allocate space
+-				   for this section */
+-	}
+-
+-	.stabstr : {
+-		__STABSTR_BEGIN__ = DEFINED(__STABSTR_BEGIN__) ? __STABSTR_BEGIN__ : .;
+-		*(.stabstr);
+-		__STABSTR_END__ = DEFINED(__STABSTR_END__) ? __STABSTR_END__ : .;
+-		BYTE(0)		/* Force the linker to allocate space
+-				   for this section */
+-	}
+-
+-	/DISCARD/ : {
+-		*(.eh_frame .note.GNU-stack .comment)
+-	}
+-}
