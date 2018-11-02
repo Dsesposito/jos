@@ -228,7 +228,6 @@ mem_init(void)
 	//       overwrite memory.  Known as a "guard page".
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
-
 	boot_map_region(kern_pgdir,
 	                KSTACKTOP - KSTKSIZE,
 	                KSTKSIZE,
@@ -243,7 +242,7 @@ mem_init(void)
 	// we just set up the mapping anyway.
 	// Permissions: kernel RW, user NONE
 	// Your code goes here:
-		boot_map_region(kern_pgdir, KERNBASE, -KERNBASE, 0, PTE_W);
+	boot_map_region(kern_pgdir, KERNBASE, -KERNBASE, 0, PTE_W);
 
 	// Initialize the SMP-related parts of the memory map
 	mem_init_mp();
@@ -295,6 +294,15 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
+	for (int i = 0; i < NCPU; i++) {
+		uint32_t cpu_offset = i * (KSTKSIZE + KSTKGAP);
+		uint32_t stack_start = KSTACKTOP - KSTKSIZE - cpu_offset;
+		boot_map_region(kern_pgdir,
+		                stack_start,
+		                KSTKSIZE,
+		                PADDR(percpu_kstacks[i]),
+		                PTE_W);
+	}
 }
 
 // --------------------------------------------------------------
@@ -342,6 +350,13 @@ page_init(void)
 
 		// Page 0 is in use
 		if (j == 0) {
+			continue;
+		}
+
+		if (currAddr >= MPENTRY_PADDR &&
+		    currAddr < MPENTRY_PADDR + PGSIZE) {
+			_Static_assert(MPENTRY_PADDR % PGSIZE == 0,
+			               "MPENTRY_PADDR is not page-aligned");
 			continue;
 		}
 
@@ -716,7 +731,20 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+
+	if (MMIOBASE + size > MMIOLIM) {
+		panic("Can't map more than %d memory for device memory",
+		      MMIOLIM - MMIOBASE);
+	}
+
+	uint32_t perms = PTE_W | PTE_PCD | PTE_PWT;
+	uint32_t start = base;
+	uint32_t rounded_size = ROUNDUP(size, PGSIZE);
+	boot_map_region(kern_pgdir, start, rounded_size, pa, perms);
+
+	base = start + rounded_size;
+
+	return (void *) start;
 }
 
 static uintptr_t user_mem_check_addr;
