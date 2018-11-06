@@ -52,6 +52,7 @@ TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
 TRAPHANDLER(trap_generalfault, T_GPFLT);
 TRAPHANDLER(trap_pagefault, T_PGFLT);
 TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
+TRAPHANDLER_NOEC(vector32, IRQ_OFFSET);
 
 /*
  * Lab 3: Your code here for _alltraps
