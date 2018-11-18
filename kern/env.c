@@ -264,6 +264,9 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
+	// Enable FL_IF for new environments created. 
+	// This ensure that user environments are always run with interrupts enabled.
+	e->env_tf.tf_eflags |= FL_IF; 
 
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
