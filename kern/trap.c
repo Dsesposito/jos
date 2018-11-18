@@ -69,17 +69,19 @@ void trap_pagefault();
 void trap_generalfault();
 void trap_syscall();
 void trap_breakpoint();
+void trap_irq();
 void
 trap_init(void)
 {
 	extern struct Segdesc gdt[];
 
 	// LAB 3: Your code here.
-	SETGATE(idt[T_DIVIDE], 1, GD_KT, trap_divzero, 0);
-	SETGATE(idt[T_GPFLT], 1, GD_KT, trap_generalfault, 0);
-	SETGATE(idt[T_PGFLT], 1, GD_KT, trap_pagefault, 0);
-	SETGATE(idt[T_BRKPT], 1, GD_KT, trap_breakpoint, 3);
-	SETGATE(idt[T_SYSCALL], 1, GD_KT, trap_syscall, 3);
+	SETGATE(idt[T_DIVIDE], 0, GD_KT, trap_divzero, 0);
+	SETGATE(idt[T_GPFLT], 0, GD_KT, trap_generalfault, 0);
+	SETGATE(idt[T_PGFLT], 0, GD_KT, trap_pagefault, 0);
+	SETGATE(idt[T_BRKPT], 0, GD_KT, trap_breakpoint, 3);
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_syscall, 3);
+	SETGATE(idt[IRQ_OFFSET + IRQ_TIMER], 0, GD_KT, trap_irq, 0);
 
 	// Per-CPU setup
 	trap_init_percpu();
@@ -218,10 +220,12 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
-
-	if (tf->tf_trapno == IRQ_OFFSET) {
+	
+	// provide handlers for IRQ
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
 		lapic_eoi();
 		sched_yield();
+		return;
   	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
@@ -260,7 +264,6 @@ trap(struct Trapframe *tf)
 		// Acquire the big kernel lock before doing any
 		// serious kernel work.
 		// LAB 4: Your code here.
-		lock_kernel();
 		assert(curenv);
 
 		// Garbage collect if current enviroment is a zombie
