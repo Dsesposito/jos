@@ -110,6 +110,7 @@ boot_aps(void)
 		// Wait for the CPU to finish some basic setup in mp_main()
 		while(c->cpu_status != CPU_STARTED)
 			;
+
 	}
 }
 
