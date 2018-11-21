@@ -106,3 +106,48 @@ Lo que hace ese sys_yield es desalojarse a si mismo de la CPU para que luego el 
 Luego de las 3 sentencias de "Hello, I am environment" se ejecuta el primer yield del primer proceso. Entonces le concede la ejecución al siguiente proceso que tambien realiza una llamada a sys_yield. Le concede la ejecución el otro proceso y tambien llama a sys_yield. Luego, retoma el primer proceso que realizo yield y continua con la siguiente linea del for que justamente es imprimir "Back in environment %08x, iteration %d.\n". Continua con la nueva iteracion y vuelve a invocar sys_yield. 
 El proceso continua de forma similar hasta que finalizan el for y se liberan los environments.
 Finalmente como no hay más environmentes para ejecutar, el scheduller invoca el monitor del kernel: "Welcome to the JOS kernel monitor!". 
+
+
+Tarea: envid2env
+----------------
+
+**PREGUNTA:**
+
+Responder qué ocurre:
+en JOS, si un proceso llama a sys_env_destroy(0)
+en Linux, si un proceso llama a kill(0, 9)
+**RESPUESTA:**
+
+En ambos casos se pide que se detruya el proceso que invoca a dicha función, por ende
+sys_env_destroy(0) : imprime por pantalla "[pid] exiting gracefully"
+kill(0,9) : Envia la señal de kill a todos los procesos que pertenezcan al mismo group id
+
+**PREGUNTA:**
+E ídem para:
+JOS: sys_env_destroy(-1)
+Linux: kill(-1, 9)
+**RESPUESTA:**
+sys_env_destroy(-1) : 
+kill(-1,9) : Se envia la señal kill -9 a todos los procesos excluidos los de sistema, a los cuales se tiene permiso de enviar
+
+Tarea: dumbfork
+----------------
+
+**PREGUNTA:**
+Si, antes de llamar a dumbfork(), el proceso se reserva a sí mismo una página con sys_page_alloc() ¿se propagará una copia al proceso hijo? ¿Por qué?
+**RESPUESTA:**
+dumbfork ejecuta la siguiente instrucción:
+	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
+		duppage(envid, addr);
+Lo que implica que se estará haciendo un copia del espacio de memoria del padre para el proceso hijo. Por ende si el padre ejecuta antes del dumbfork el sys_page_alloc, se propagará uan copia al hijo.
+
+**PREGUNTA:**
+¿Se preserva el estado de solo-lectura en las páginas copiadas? Mostrar, con código en espacio de usuario, cómo saber si una dirección de memoria es modificable por el proceso, o no. (Ayuda: usar las variables globales uvpd y/o uvpt.)
+**RESPUESTA:**
+En el codigo se ejecuta duppage para reservar las paginas en memoria, dicha función invoca a :
+ sys_page_alloc(dstenv, addr, PTE_P|PTE_U|PTE_W) : lo cual implica que la pagina se creará con permisos de escritura simpre
+ Utilizando las variables globales uvpd y/o uvpt se puede saber si una direccion es modificable por el proceso usuario de la siguiente manera
+    if(uvpt[PTX(va)] & PTE_U)
+        Modificable por el proceso  
+ 
+ 
