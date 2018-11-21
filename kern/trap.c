@@ -14,8 +14,6 @@
 #include <kern/cpu.h>
 #include <kern/spinlock.h>
 
-static struct Taskstate ts;
-
 /* For debugging, so print_trapframe can distinguish between printing
  * a saved trapframe and printing the current trapframe and print some
  * additional information in the latter case.
@@ -114,20 +112,28 @@ trap_init_percpu(void)
 	//
 	// LAB 4: Your code here:
 
+	int id = cpunum();
+	struct CpuInfo *cpu = &cpus[id];
+	struct Taskstate *ts = &cpu->cpu_ts;
+
 	// Setup a TSS so that we get the right stack
 	// when we trap to the kernel.
-	ts.ts_esp0 = KSTACKTOP;
-	ts.ts_ss0 = GD_KD;
-	ts.ts_iomb = sizeof(struct Taskstate);
+	ts->ts_esp0 = KSTACKTOP - id * (KSTKSIZE + KSTKGAP);
+	ts->ts_ss0 = GD_KD;
+	ts->ts_iomb = sizeof(struct Taskstate);
 
 	// Initialize the TSS slot of the gdt.
-	gdt[GD_TSS0 >> 3] =
-	        SEG16(STS_T32A, (uint32_t)(&ts), sizeof(struct Taskstate) - 1, 0);
-	gdt[GD_TSS0 >> 3].sd_s = 0;
+	//int idx = GD_TSS0 + id;
+	//int seg = idx << 3;
+    int idx = (GD_TSS0 >> 3) + id;
+    int seg = idx << 3;
+	gdt[idx] =
+	        SEG16(STS_T32A, (uint32_t)(ts), sizeof(struct Taskstate) - 1, 0);
+	gdt[idx].sd_s = 0;
 
 	// Load the TSS selector (like other segment selectors, the
 	// bottom three bits are special; we leave them 0)
-	ltr(GD_TSS0);
+	ltr(seg);
 
 	// Load the IDT
 	lidt(&idt_pd);
@@ -264,6 +270,8 @@ trap(struct Trapframe *tf)
 		// Acquire the big kernel lock before doing any
 		// serious kernel work.
 		// LAB 4: Your code here.
+		lock_kernel();
+
 		assert(curenv);
 
 		// Garbage collect if current enviroment is a zombie
@@ -346,6 +354,38 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
+	if(curenv->env_pgfault_upcall){
+
+		//First check permissions
+		user_mem_assert(curenv,(void *)UXSTACKTOP - PGSIZE,PGSIZE,PTE_P | PTE_W | PTE_U);
+
+		uint32_t uxstack = UXSTACKTOP;
+
+		//Check if is a recursive page fault
+		if(tf->tf_esp < UXSTACKTOP && tf->tf_esp >= UXSTACKTOP-PGSIZE){
+			uint32_t word = 4;
+			uxstack	= tf->tf_esp - word;
+		}
+
+		uxstack = uxstack - sizeof(struct UTrapframe);
+
+		struct UTrapframe *u = (struct UTrapframe*) uxstack;
+
+		//Fill user trap frame
+		u->utf_fault_va = fault_va;
+		u->utf_err = tf->tf_err;
+		u->utf_regs = tf->tf_regs;
+		u->utf_eip = tf->tf_eip;
+		u->utf_eflags = tf->tf_eflags;
+		u->utf_esp = tf->tf_esp;
+
+		tf->tf_esp = uxstack;
+		tf->tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		env_run(curenv);
+
+		panic("This code can't be reach");
+
+	}
 
 	// Destroy the environment that caused the fault.
 	cprintf("[%08x] user fault va %08x ip %08x\n",

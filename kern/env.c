@@ -604,6 +604,8 @@ env_run(struct Env *e)
 	curenv->env_runs++;
 	// Use lcr3() to switch to its address space
 	lcr3(PADDR(curenv->env_pgdir));
+	//Release big lock
+	unlock_kernel();
 	// Use env_pop_tf() to restore the environment's registers
 	env_pop_tf(&(curenv->env_tf));
 }
