@@ -1,0 +1,1606 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+index 06b0842..a8e4188 100644
+--- a/.vscode/settings.json
++++ b/.vscode/settings.json
+@@ -1,3 +1,7 @@
+ {
+-    "C_Cpp.dimInactiveRegions": false
++    "C_Cpp.dimInactiveRegions": false,
++    "files.associations": {
++        "monitor.h": "c"
++    },
++    "python.pythonPath": "/usr/bin/python3"
+ }
+\ No newline at end of file
+diff --git a/TP3.md b/TP3.md
+new file mode 100644
+index 0000000..4d9741a
+--- /dev/null
++++ b/TP3.md
+@@ -0,0 +1,400 @@
++TP3: Multitarea con desalojo
++=============================
++
++static_assert
++-------------
++
++**PREGUNTA:** 
++
++¿Cómo y por qué funciona la macro static_assert que define JOS?
++
++**RESPUESTA:**
++
++Esto se puede ver facilmente si se define un static assert que no tiene sentido. Por ejemplo si definimos el siguiente bloque
++
++```c
++    #define TEST_STATIC_ASSERT 0x100
++    static_assert(TEST_STATIC_ASSERT % PGSIZE == 0);
++```
++
++observamos el siguiente error al querer compilar:
++
++```c
++    error: duplicate case value
++```
++
++Esto se debe a que si observamos la definición de la macro vemos que:
++
++```c
++    #define static_assert(x)	switch (x) case 0: case (x):
++```
++
++Entonces si el valor de la operacion resto devuelve 0, el case 0 queda duplicado y esto falla en tiempo de compilación.
++
++Tarea: env_return
++-----------------
++
++**PREGUNTA:**
++
++al terminar un proceso su función umain() ¿dónde retoma la ejecución el kernel? Describir la secuencia de llamadas desde que termina umain() hasta que el kernel dispone del proceso.
++¿en qué cambia la función env_destroy() en este TP, respecto al TP anterior?
++
++**RESPUESTA:**
++
++umain() finaliza con una llamada a sys_env_destroy(). Esa función termina invocando a env_destroy() que detecta que el environment e eliminar es curenv y se encuentra en estado "ENV_RUNNING". Procederá a liberarlo por medio de la función env_free() y luego incova al sheduller mediante sched_yield().  
++El scheduller elije otro environment para ejecutar. Realiza un switch al primer environment encontrado cuyo estado sea ENV_RUNNABLE. Si no hay mas environments el scheduller invoca el monitor del kernel.
++
++La función env_destroy cambia mucho entre el tp anterior y el actual.
++En el TP anterior cuando se invocaba a env_destroy destruia directamente el único environment que existia. Finalizaba invocando indefinidamente al monitor del kernel.
++En el TP actual la función es más compleja: Contempla el caso en que el environment posea un estado "ENV_RUNNING" y además no sea curenv. Son environments "zombies" y le aplica un estado "ENV_DYING" y retorna. No lo libera.
++En cualquier otro caso lo libera, y si además si el environment es igual a curenv entonces setea curenv a NULL y luego invoca a la función sched_yield(), es decir, no invoca directamente el monitor del kernel como en el anterior caso. 
++
++Tarea: sys_yield
++----------------
++
++**PREGUNTA:**
++
++Leer y estudiar el código del programa user/yield.c. Cambiar la función i386_init() para lanzar tres instancias de dicho programa, y mostrar y explicar la salida de make qemu-nox
++
++**RESPUESTA:**
++
++Salida de qemu-nox
++```
++qemu-system-i386 -nographic -drive file=obj/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio -gdb tcp:127.0.0.1:26000 -D qemu.log -smp 1  -d guest_errors
++6828 decimal is 15254 octal!
++Physical memory: 131072K available, base = 640K, extended = 130432K
++Starting page init
++check_page_free_list() succeeded!
++Free page list checked. Continuing to page alloc check
++check_page_alloc() succeeded!
++Page alloc checked. Continuing to page check
++check_page() succeeded!
++Page checked. Continuing to set up virtual memory
++check_kern_pgdir() succeeded!
++check_page_free_list() succeeded!
++check_page_installed_pgdir() succeeded!
++SMP: CPU 0 found 1 CPU(s)
++enabled interrupts: 1 2
++[00000000] new env 00001000
++[00000000] new env 00001001
++[00000000] new env 00001002
++Hello, I am environment 00001000.
++Hello, I am environment 00001001.
++Hello, I am environment 00001002.
++Back in environment 00001000, iteration 0.
++Back in environment 00001001, iteration 0.
++Back in environment 00001002, iteration 0.
++Back in environment 00001000, iteration 1.
++Back in environment 00001001, iteration 1.
++Back in environment 00001002, iteration 1.
++Back in environment 00001000, iteration 2.
++Back in environment 00001001, iteration 2.
++Back in environment 00001002, iteration 2.
++Back in environment 00001000, iteration 3.
++Back in environment 00001001, iteration 3.
++Back in environment 00001002, iteration 3.
++Back in environment 00001000, iteration 4.
++All done in environment 00001000.
++[00001000] exiting gracefully
++[00001000] free env 00001000
++Back in environment 00001001, iteration 4.
++All done in environment 00001001.
++[00001001] exiting gracefully
++[00001001] free env 00001001
++Back in environment 00001002, iteration 4.
++All done in environment 00001002.
++[00001002] exiting gracefully
++[00001002] free env 00001002
++No runnable environments in the system!
++Welcome to the JOS kernel monitor!
++Type 'help' for a list of commands.
++```
++
++Cada proceso yield posee un for y la primera instrucción del for es un sys_yield. 
++Lo que hace ese sys_yield es desalojarse a si mismo de la CPU para que luego el sheduller elija con que proceso seguir. 
++Luego de las 3 sentencias de "Hello, I am environment" se ejecuta el primer yield del primer proceso. Entonces le concede la ejecución al siguiente proceso que tambien realiza una llamada a sys_yield. Le concede la ejecución el otro proceso y tambien llama a sys_yield. Luego, retoma el primer proceso que realizo yield y continua con la siguiente linea del for que justamente es imprimir "Back in environment %08x, iteration %d.\n". Continua con la nueva iteracion y vuelve a invocar sys_yield. 
++El proceso continua de forma similar hasta que finalizan el for y se liberan los environments.
++Finalmente como no hay más environmentes para ejecutar, el scheduller invoca el monitor del kernel: "Welcome to the JOS kernel monitor!". 
++
++Tarea: envid2env
++----------------
++
++**PREGUNTA:**
++
++Responder qué ocurre:
++en JOS, si un proceso llama a sys_env_destroy(0)
++en Linux, si un proceso llama a kill(0, 9)
++
++**RESPUESTA:**
++
++En ambos casos se pide que se detruya el proceso que invoca a dicha función, por ende
++sys_env_destroy(0) : imprime por pantalla "[pid] exiting gracefully"
++kill(0,9) : Envia la señal de kill a todos los procesos que pertenezcan al mismo group id
++
++**PREGUNTA:**
++
++E ídem para:
++JOS: sys_env_destroy(-1)
++Linux: kill(-1, 9)
++
++**RESPUESTA:**
++
++sys_env_destroy(-1) : 
++kill(-1,9) : Se envia la señal kill -9 a todos los procesos excluidos los de sistema, a los cuales se tiene permiso de enviar
++
++
++Tarea: ipc_recv
++---------------
++
++**PREGUNTA:**
++
++Un proceso podría intentar enviar el valor númerico -E_INVAL vía ipc_send(). ¿Cómo es posible distinguir si es un error, o no? En estos casos:
++
++**RESPUESTA:**
++
++// Versión A
++<code>
++envid_t src = -1;
++int r = ipc_recv(&src, 0, NULL);
++
++if (r < 0)
++  if (!src)
++    puts("Hubo error.");
++  else
++    puts("Valor negativo correcto.")
++</code>
++
++// Versión B
++<code>
++int r = ipc_recv(NULL, 0, NULL);
++
++if (r < 0)
++  if (/* ??? */)
++    puts("Hubo error.");
++  else
++    puts("Valor negativo correcto.")
++</code>
++En la versión B no es posible detectar un error ya que siempre el valor de from_env_store será NULL sea o no sea error. No contamos con otra variable a la cual chequear y verificar en base a su valor si se trata de un error o no.
++
++Tarea: sys_ipc_try_send
++-----------------------
++
++**PREGUNTA:**
++
++¿Cómo se podría hacer bloqueante esta llamada? Esto es: qué estrategia de implementación se podría usar para que, si un proceso A intenta a enviar a B, pero B no está esperando un mensaje, el proceso A sea puesto en estado ENV_NOT_RUNNABLE, y sea despertado una vez B llame a ipc_recv().
++
++**RESPUESTA:**
++
++La llamada podría hacerse bloqueante modificando la función ipc_send para que setee curenv en estado "ENV_NO_RUNNABLE" cuando obtiene como respuesta -E_IPC_NOT_RECV.
++Cuando ejecutamos ipc_recv() debemos setear como "ENV_RUNNABLE" el environment que intentaba enviar un mensaje y el destinatario no lo estaba esperando.
++
++Tarea: dumbfork
++---------------
++
++**PREGUNTA:**
++
++Si, antes de llamar a dumbfork(), el proceso se reserva a sí mismo una página con sys_page_alloc() ¿se propagará una copia al proceso hijo? ¿Por qué?
++
++**RESPUESTA:**
++
++dumbfork ejecuta la siguiente instrucción:
++	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
++		duppage(envid, addr);
++Lo que implica que se estará haciendo un copia del espacio de memoria del padre para el proceso hijo. Por ende si el padre ejecuta antes del dumbfork el sys_page_alloc, se propagará uan copia al hijo.
++
++**PREGUNTA:**
++
++¿Se preserva el estado de solo-lectura en las páginas copiadas? Mostrar, con código en espacio de usuario, cómo saber si una dirección de memoria es modificable por el proceso, o no. (Ayuda: usar las variables globales uvpd y/o uvpt.)
++
++**RESPUESTA:**
++
++En el codigo se ejecuta duppage para reservar las paginas en memoria, dicha función invoca a :
++ sys_page_alloc(dstenv, addr, PTE_P|PTE_U|PTE_W) : lo cual implica que la pagina se creará con permisos de escritura simpre
++ Utilizando las variables globales uvpd y/o uvpt se puede saber si una direccion es modificable por el proceso usuario de la siguiente manera
++    if(uvpt[PTX(va)] & PTE_U)
++        Modificable por el proceso  
++ 
++
++multicore_init
++-------------
++
++**PREGUNTA:** 
++
++¿Qué código copia, y a dónde, la siguiente línea de la función boot_aps()?
++
++```c
++    memmove(code, mpentry_start, mpentry_end - mpentry_start);
++```
++
++**RESPUESTA:**
++
++La linea mencionada copia el codigo de entrada del application processors (AP) ubicado en kern/mpentry.S (.globl mpentry_start) a la dirección de memoria física MPENTRY_PADDR
++
++**PREGUNTA:**
++
++¿Para qué se usa la variable global mpentry_kstack?
++
++**RESPUESTA:**
++
++Al momento de comenzar a correr un AP se ejecutan las siguientes lineas de código
++
++```c
++    // Tell mpentry.S what stack to use 
++    mpentry_kstack = percpu_kstacks[c - cpus] + KSTKSIZE;
++    // Start the CPU at mpentry_start
++    lapic_startap(c->cpu_id, PADDR(code));
++```
++
++Como se puede ver , antes de mandar a correr el AP lo que se hace es apuntar mpentry_kstack a la primera dirección de memoria del kernel stack del cpu que se esta mandando a correr. En mpentry.S se puede ver como mueven dicha direccion de memoria al registro stack pointer del cpu.
++
++```c
++	movl    mpentry_kstack, %esp 
++```
++
++Por lo tanto a mpentry_kstack se la utiliza en mpentry.S para cargarle al cpu el stack.
++
++**PREGUNTA:** 
++
++¿Qué ocurriría si el espacio para este stack se reservara en el archivo kern/mpentry.S, de manera similar a bootstack en el archivo kern/entry.S?
++
++**RESPUESTA:**
++
++El código mpentry.S es ejecutado por N-1 CPUs y la memoria en entry.S se genera de manera estática. Si se generará la memoria de la misma manera todos los cpus quedarían apuntando al mismo stack.
++
++**PREGUNTA:** 
++
++Cuando QEMU corre con múltiples CPUs, éstas se muestran en GDB como hilos de ejecución separados. Mostrar una sesión de GDB en la que se muestre cómo va cambiando el valor de la variable global mpentry_kstack
++
++**RESPUESTA:**
++
++A continuación se muestra la salida de gdb pedida
++
++```
++    make gdb 
++    gdb -q -s obj/kern/kernel -ex 'target remote 127.0.0.1:26000' -n -x .gdbinit
++    Reading symbols from obj/kern/kernel...done.
++    Remote debugging using 127.0.0.1:26000
++    0x0000fff0 in ?? ()
++    (gdb) b init.c:109
++    Breakpoint 1 at 0xf0100171: file kern/init.c, line 109.
++    (gdb) c
++    Continuing.
++    The target architecture is assumed to be i386
++    => 0xf0100171 <boot_aps+108>:	mov    %esi,%ecx
++    
++    Thread 1 hit Breakpoint 1, boot_aps () at kern/init.c:109
++    109			lapic_startap(c->cpu_id, PADDR(code));
++    (gdb) p mpentry_kstack
++    $1 = (void *) 0xf024d000 <percpu_kstacks+65536>
++    (gdb) p/a mpentry_kstack 
++    $2 = 0xf024d000 <percpu_kstacks+65536>
++    (gdb) c
++    Continuing.
++    => 0xf0100171 <boot_aps+108>:	mov    %esi,%ecx
++    
++    Thread 1 hit Breakpoint 1, boot_aps () at kern/init.c:109
++    109			lapic_startap(c->cpu_id, PADDR(code));
++    (gdb) p/a mpentry_kstack 
++    $3 = 0xf0255000 <percpu_kstacks+98304>
++    (gdb) c
++    Continuing.
++    => 0xf0100171 <boot_aps+108>:	mov    %esi,%ecx
++    
++    Thread 1 hit Breakpoint 1, boot_aps () at kern/init.c:109
++    109			lapic_startap(c->cpu_id, PADDR(code));
++    (gdb) p/a mpentry_kstack 
++    $4 = 0xf025d000 <percpu_kstacks+131072>
++    (gdb) c
++    Continuing.
++```
++
++Las direcciones apuntadas por mpentry_kstack fueron:
++
++ * 0xf024d000
++ * 0xf0255000
++ * 0xf025d000
++
++**PREGUNTA:** 
++
++En el archivo kern/mpentry.S se puede leer:
++
++```c                                                          
++    # We cannot use kern_pgdir yet because we are still
++    # running at a low EIP.
++    movl $(RELOC(entry_pgdir)), %eax
++```
++
++¿Qué valor tiene el registro %eip cuando se ejecuta esa línea? Responder con redondeo a 12 bits, justificando desde qué región de memoria se está ejecutando este código.                
++                                          
++**RESPUESTA:**  
++
++Dado que el código se mueve a la posición de memoria MPENTRY_PADDR, la dirección que contrendrá el instruction pointer redondeado a 12 bits será justamente MPENTRY_PADDR . 
++
++
++**PREGUNTA:**
++
++¿Se detiene en algún momento la ejecución si se pone un breakpoint en mpentry_start? ¿Por qué?   
++
++**RESPUESTA:**
++
++No, no se detiene. Esto sucede porque el código se esta ejecutando desde a partir de MPENTRY_PADDR.
++
++**PREGUNTA:**
++
++Con GDB, mostrar el valor exacto de %eip y mpentry_kstack cuando se ejecuta la instrucción anterior en el último AP. 
++
++**RESPUESTA:**
++
++A continuación se muestra la sesion de gdb solicitada
++
++```
++    make gdb 
++    gdb -q -s obj/kern/kernel -ex 'target remote 127.0.0.1:26000' -n -x .gdbinit
++    Reading symbols from obj/kern/kernel...done.
++    Remote debugging using 127.0.0.1:26000
++    0x0000fff0 in ?? ()
++    (gdb) b *0x7000 thread 4
++    Breakpoint 1 at 0x7000
++    (gdb) c
++    Continuing.
++    
++    Thread 2 received signal SIGTRAP, Trace/breakpoint trap.
++    [Switching to Thread 2]
++    warning: A handler for the OS ABI "GNU/Linux" is not built into this configuration
++    of GDB.  Attempting to continue with the default i8086 settings.
++    
++    The target architecture is assumed to be i8086
++    [ 700:   0]    0x7000:	cli    
++    0x00000000 in ?? ()
++    (gdb) disable 1
++    (gdb) si 10
++    The target architecture is assumed to be i386
++    => 0x7020:	mov    $0x10,%ax
++    0x00007020 in ?? ()
++    (gdb) x/10i $eip
++    => 0x7020:	mov    $0x10,%ax
++       0x7024:	mov    %eax,%ds
++       0x7026:	mov    %eax,%es
++       0x7028:	mov    %eax,%ss
++       0x702a:	mov    $0x0,%ax
++       0x702e:	mov    %eax,%fs
++       0x7030:	mov    %eax,%gs
++       0x7032:	mov    $0x11f000,%eax
++       0x7037:	mov    %eax,%cr3
++       0x703a:	mov    %cr4,%eax
++    (gdb) watch $eax == 0x11f000
++    Watchpoint 2: $eax == 0x11f000
++    (gdb) c
++    Continuing.
++    => 0x7037:	mov    %eax,%cr3
++    
++    Thread 2 hit Watchpoint 2: $eax == 0x11f000
++    
++    Old value = 0
++    New value = 1
++    0x00007037 in ?? ()
++    (gdb) p $eip
++    $1 = (void (*)()) 0x7037
++    (gdb) p mpentry_kstack
++    $2 = (void *) 0x0
++```
+\ No newline at end of file
+diff --git a/__pycache__/gradelib.cpython-36.pyc b/__pycache__/gradelib.cpython-36.pyc
+index 12b5a0e..5e45bcc 100644
+Binary files a/__pycache__/gradelib.cpython-36.pyc and b/__pycache__/gradelib.cpython-36.pyc differ
+diff --git a/grade-lab4 b/grade-lab4
+index 91e52b4..38b4daf 100755
+--- a/grade-lab4
++++ b/grade-lab4
+@@ -40,7 +40,7 @@ def test_yield():
+ 
+ @test(1)
+ def test_spin0():
+-    r.user_test("spin0", timeout=0.5)
++    r.user_test("spin0", timeout=1)
+     r.match(E(".00000000. new env $E1"),
+             E(".00000000. new env $E2"),
+             E("I am $E1 and my spin will go on #1"),
+diff --git a/kern/env.c b/kern/env.c
+index f303b30..bae85a3 100644
+--- a/kern/env.c
++++ b/kern/env.c
+@@ -264,6 +264,10 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
+ 
+ 	// Enable interrupts while in user mode.
+ 	// LAB 4: Your code here.
++	// Enable FL_IF for new environments created.
++	// This ensure that user environments are always run with interrupts
++	// enabled.
++	e->env_tf.tf_eflags |= FL_IF;
+ 
+ 	// Clear the page fault handler until user installs one.
+ 	e->env_pgfault_upcall = 0;
+@@ -271,6 +275,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
+ 	// Also clear the IPC receiving flag.
+ 	e->env_ipc_recving = 0;
+ 
++
+ 	// commit the allocation
+ 	env_free_list = e->env_link;
+ 	*newenv_store = e;
+@@ -600,6 +605,8 @@ env_run(struct Env *e)
+ 	curenv->env_runs++;
+ 	// Use lcr3() to switch to its address space
+ 	lcr3(PADDR(curenv->env_pgdir));
++	// Release big lock
++	unlock_kernel();
+ 	// Use env_pop_tf() to restore the environment's registers
+ 	env_pop_tf(&(curenv->env_tf));
+ }
+diff --git a/kern/init.c b/kern/init.c
+index 3c83f7d..89c5df5 100755
+--- a/kern/init.c
++++ b/kern/init.c
+@@ -50,6 +50,7 @@ i386_init(void)
+ 
+ 	// Acquire the big kernel lock before waking up APs
+ 	// Your code here:
++	lock_kernel();
+ 
+ 	// Starting non-boot CPUs
+ 	boot_aps();
+@@ -75,7 +76,7 @@ i386_init(void)
+ 
+ 	// Eliminar esta llamada una vez completada la parte 1
+ 	// e implementado sched_yield().
+-	env_run(&envs[0]);
++	// env_run(&envs[0]);  
+ 
+ 	// Schedule and run the first user environment!
+ 	sched_yield();
+@@ -110,6 +111,7 @@ boot_aps(void)
+ 		// Wait for the CPU to finish some basic setup in mp_main()
+ 		while(c->cpu_status != CPU_STARTED)
+ 			;
++
+ 	}
+ }
+ 
+@@ -131,9 +133,8 @@ mp_main(void)
+ 	// only one CPU can enter the scheduler at a time!
+ 	//
+ 	// Your code here:
+-
+-	// Remove this after you finish Exercise 4
+-	for (;;);
++	lock_kernel();
++	sched_yield();
+ }
+ 
+ /*
+diff --git a/kern/mpentry.S b/kern/mpentry.S
+index 72dd827..3c11340 100644
+--- a/kern/mpentry.S
++++ b/kern/mpentry.S
+@@ -64,6 +64,10 @@ start32:
+ 	# we are still running at a low EIP.
+ 	movl    $(RELOC(entry_pgdir)), %eax
+ 	movl    %eax, %cr3
++    # Turn on large pages
++    movl	%cr4, %eax
++    orl     $(CR4_PSE), %eax
++    movl    %eax, %cr4
+ 	# Turn on paging.
+ 	movl    %cr0, %eax
+ 	orl     $(CR0_PE|CR0_PG|CR0_WP), %eax
+diff --git a/kern/pmap.c b/kern/pmap.c
+index 7bbbf5f..9d83448 100644
+--- a/kern/pmap.c
++++ b/kern/pmap.c
+@@ -228,7 +228,6 @@ mem_init(void)
+ 	//       overwrite memory.  Known as a "guard page".
+ 	//     Permissions: kernel RW, user NONE
+ 	// Your code goes here:
+-
+ 	boot_map_region(kern_pgdir,
+ 	                KSTACKTOP - KSTKSIZE,
+ 	                KSTKSIZE,
+@@ -295,6 +294,15 @@ mem_init_mp(void)
+ 	//     Permissions: kernel RW, user NONE
+ 	//
+ 	// LAB 4: Your code here:
++	for (int i = 0; i < NCPU; i++) {
++		uint32_t cpu_offset = i * (KSTKSIZE + KSTKGAP);
++		uint32_t stack_start = KSTACKTOP - KSTKSIZE - cpu_offset;
++		boot_map_region(kern_pgdir,
++		                stack_start,
++		                KSTKSIZE,
++		                PADDR(percpu_kstacks[i]),
++		                PTE_W);
++	}
+ }
+ 
+ // --------------------------------------------------------------
+@@ -345,6 +353,13 @@ page_init(void)
+ 			continue;
+ 		}
+ 
++		if (currAddr >= MPENTRY_PADDR &&
++		    currAddr < MPENTRY_PADDR + PGSIZE) {
++			_Static_assert(MPENTRY_PADDR % PGSIZE == 0,
++			               "MPENTRY_PADDR is not page-aligned");
++			continue;
++		}
++
+ 		// Io segment in use.
+ 		if (currAddr >= IOPHYSMEM && currAddr < EXTPHYSMEM) {
+ 			continue;
+@@ -716,7 +731,20 @@ mmio_map_region(physaddr_t pa, size_t size)
+ 	// Hint: The staff solution uses boot_map_region.
+ 	//
+ 	// Your code here:
+-	panic("mmio_map_region not implemented");
++
++	if (MMIOBASE + size > MMIOLIM) {
++		panic("Can't map more than %d memory for device memory",
++		      MMIOLIM - MMIOBASE);
++	}
++
++	uint32_t perms = PTE_W | PTE_PCD | PTE_PWT;
++	uint32_t start = base;
++	uint32_t rounded_size = ROUNDUP(size, PGSIZE);
++	boot_map_region(kern_pgdir, start, rounded_size, pa, perms);
++
++	base = start + rounded_size;
++
++	return (void *) start;
+ }
+ 
+ static uintptr_t user_mem_check_addr;
+diff --git a/kern/sched.c b/kern/sched.c
+index 7726e32..e5a7473 100644
+--- a/kern/sched.c
++++ b/kern/sched.c
+@@ -31,6 +31,23 @@ sched_yield(void)
+ 	// LAB 4: Your code here.
+ 
+ 	// sched_halt never returns
++	int j, cenv = 0;
++
++	if (curenv)
++		cenv = ENVX(curenv->env_id);
++	else
++		cenv = 0;
++
++	for (j = 0; j < NENV; j++) {
++		if (envs[cenv].env_status == ENV_RUNNABLE) {
++			env_run(envs + cenv);
++		}
++		cenv = (cenv + 1) % NENV;
++	}
++	if (curenv && curenv->env_status == ENV_RUNNING)
++		env_run(curenv);
++
++	// sched_halt never returns
+ 	sched_halt();
+ }
+ 
+diff --git a/kern/syscall.c b/kern/syscall.c
+index b69c413..eeafd1c 100644
+--- a/kern/syscall.c
++++ b/kern/syscall.c
+@@ -84,28 +84,45 @@ sys_exofork(void)
+ 	// from the current environment -- but tweaked so sys_exofork
+ 	// will appear to return 0.
+ 
+-	// LAB 4: Your code here.
+-	panic("sys_exofork not implemented");
++	struct Env *env;
++	int ret = env_alloc(&env, ENVX(curenv->env_id));
++	if (ret)
++		return ret;
++	env->env_status = ENV_NOT_RUNNABLE;
++	env->env_tf = curenv->env_tf;
++	env->env_tf.tf_regs.reg_eax = 0;
++	env->env_parent_id = curenv->env_id;
++	return env->env_id;
+ }
+ 
+-// Set envid's env_status to status, which must be ENV_RUNNABLE
+-// or ENV_NOT_RUNNABLE.
+-//
+-// Returns 0 on success, < 0 on error.  Errors are:
+-//	-E_BAD_ENV if environment envid doesn't currently exist,
+-//		or the caller doesn't have permission to change envid.
+-//	-E_INVAL if status is not a valid status for an environment.
+ static int
+ sys_env_set_status(envid_t envid, int status)
+ {
+-	// Hint: Use the 'envid2env' function from kern/env.c to translate an
+-	// envid to a struct Env.
++	// Set envid's env_status to status, which must be ENV_RUNNABLE
++	// or ENV_NOT_RUNNABLE.
++	if (status != ENV_RUNNABLE && status != ENV_NOT_RUNNABLE)
++		return -E_INVAL;
++
++	struct Env *env;
+ 	// You should set envid2env's third argument to 1, which will
+ 	// check whether the current environment has permission to set
+ 	// envid's status.
++	// Hint: Use the 'envid2env' function from kern/env.c to translate an
++	// envid to a struct Env.
++	int ret = envid2env(envid,
++	                    &env,
++	                    1);  // Use the 'envid2env' function to translate an
+ 
+-	// LAB 4: Your code here.
+-	panic("sys_env_set_status not implemented");
++
++	// Returns 0 on success, < 0 on error.  Errors are:
++	//	-E_BAD_ENV if environment envid doesn't currently exist,
++	//		or the caller doesn't have permission to change envid.
++	//	-E_INVAL if status is not a valid status for an environment.
++	//// envid to a struct Env.
++	if (ret)
++		return ret;
++	env->env_status = status;
++	return 0;
+ }
+ 
+ // Set the page fault upcall for 'envid' by modifying the corresponding struct
+@@ -119,8 +136,18 @@ sys_env_set_status(envid_t envid, int status)
+ static int
+ sys_env_set_pgfault_upcall(envid_t envid, void *func)
+ {
+-	// LAB 4: Your code here.
+-	panic("sys_env_set_pgfault_upcall not implemented");
++	struct Env *env;
++
++	int result = envid2env(envid, &env, 1);
++
++	if (result < 0) {
++		return -E_BAD_ENV;
++	}
++
++	user_mem_assert(env, func, sizeof(uint32_t), PTE_U | PTE_P);
++
++	env->env_pgfault_upcall = func;
++	return 0;
+ }
+ 
+ // Allocate a page of memory and map it at 'va' with permission
+@@ -148,9 +175,34 @@ sys_page_alloc(envid_t envid, void *va, int perm)
+ 	//   parameters for correctness.
+ 	//   If page_insert() fails, remember to free the page you
+ 	//   allocated!
++	struct Env *env;
++	int ret = 0;
++	ret = envid2env(envid, &env, 1);
++	if (ret)
++		return ret;
+ 
+-	// LAB 4: Your code here.
+-	panic("sys_page_alloc not implemented");
++	if ((uint32_t) va >= UTOP || PGOFF(va))
++		return -E_INVAL;
++	// check if perm is inappropriate
++	if ((perm & (PTE_U | PTE_P)) != (PTE_U | PTE_P))
++		return -E_INVAL;
++	if (perm & ~(PTE_SYSCALL))
++		return -E_INVAL;
++
++	//  This function is a wrapper around page_alloc() and
++	//  page_insert()
++	struct PageInfo *page = page_alloc(ALLOC_ZERO);
++	if (!page)
++		return -E_NO_MEM;
++	ret = page_insert(env->env_pgdir, page, va, perm);
++	if (ret) {
++		//   If page_insert() fails, remember to free the page you
++		//   allocated!
++		page_free(page);
++		return ret;
++	}
++	memset(page2kva(page), 0, PGSIZE);
++	return 0;
+ }
+ 
+ // Map the page of memory at 'srcva' in srcenvid's address space
+@@ -178,9 +230,41 @@ sys_page_map(envid_t srcenvid, void *srcva, envid_t dstenvid, void *dstva, int p
+ 	//   parameters for correctness.
+ 	//   Use the third argument to page_lookup() to
+ 	//   check the current permissions on the page.
++	struct Env *srcenv, *dstenv;
+ 
+-	// LAB 4: Your code here.
+-	panic("sys_page_map not implemented");
++	// -E_NO_MEM if there's no memory to allocate any necessary page tables.
++	// set src envieroment
++	int ret = envid2env(srcenvid, &srcenv, 1);
++	if (ret)
++		return ret;
++	// set dst envieroment
++	ret = envid2env(dstenvid, &dstenv, 1);
++	if (ret)
++		return ret;
++
++	//	-E_INVAL is srcva is not mapped in srcenvid's address space.
++
++	if ((uint32_t) srcva >= UTOP || PGOFF(srcva) ||
++	    (uint32_t) dstva >= UTOP || PGOFF(dstva))
++		return -E_INVAL;
++
++	//	-E_INVAL if perm is inappropriate (see sys_page_alloc).
++	if ((perm & (PTE_U | PTE_P)) != (PTE_U | PTE_P))
++		return -E_INVAL;
++	if (perm & ~(PTE_SYSCALL))
++		return -E_INVAL;
++
++	// This function is a wrapper around page_lookup() and page_insert()
++	pte_t *pte;
++	struct PageInfo *page = page_lookup(srcenv->env_pgdir, srcva, &pte);
++	if (!page)
++		return -E_INVAL;
++	//	-E_INVAL if (perm & PTE_W), but srcva is read-only in srcenvid's
++	//		address space.
++	if ((perm & PTE_W) && !(*pte & PTE_W))
++		return -E_INVAL;
++
++	return page_insert(dstenv->env_pgdir, page, dstva, perm);
+ }
+ 
+ // Unmap the page of memory at 'va' in the address space of 'envid'.
+@@ -193,10 +277,16 @@ sys_page_map(envid_t srcenvid, void *srcva, envid_t dstenvid, void *dstva, int p
+ static int
+ sys_page_unmap(envid_t envid, void *va)
+ {
+-	// Hint: This function is a wrapper around page_remove().
++	struct Env *e;
++	int ret = envid2env(envid, &e, 1);
++	if (ret)
++		return ret;
+ 
+-	// LAB 4: Your code here.
+-	panic("sys_page_unmap not implemented");
++	if ((uint32_t) va >= UTOP || PGOFF(va))
++		return -E_INVAL;
++	// Hint: This function is a wrapper around page_remove().
++	page_remove(e->env_pgdir, va);
++	return 0;
+ }
+ 
+ // Try to send 'value' to the target env 'envid'.
+@@ -241,7 +331,72 @@ static int
+ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
+ {
+ 	// LAB 4: Your code here.
+-	panic("sys_ipc_try_send not implemented");
++	struct Env *env;
++	// First we made some comprobations to detect Errors mentioned above the
++	// code.
++	if (envid2env(envid, &env, 0)) {
++		// When we set to 0, we are assuming that can send to anyone
++		return -E_BAD_ENV;
++	}
++	// if the receiver is not receiving, then ...
++	if (!env->env_ipc_recving) {
++		return -E_IPC_NOT_RECV;
++	}
++
++	// The sender is trying to deliver a page and the receiver is accepting
++	// a page:
++	uintptr_t va_ds = (uintptr_t) env->env_ipc_dstva;
++	uintptr_t va_src = (uintptr_t) srcva;
++	if (va_ds < UTOP && va_src < UTOP) {
++		// if va_src is not page aligned then error.
++		if (va_src % PGSIZE != 0)
++			return -E_INVAL;
++
++		// if permission is not correct then error.
++		if ((perm & (~PTE_SYSCALL)) != 0 || (perm & (PTE_U | PTE_P)) == 0) {
++			// PTE_U and PTE_P must be setted. Bit out PTE_SYSCALL
++			// not allowed.
++			return -E_INVAL;
++		}
++
++		// Lookup for the physical page that is mapped at srcva
++		// If srcva is not mapped in srcenv address space, pp is null
++		pte_t *pte;
++		struct PageInfo *pp = page_lookup(curenv->env_pgdir, srcva, &pte);
++		if (!pp) {
++			return -E_INVAL;
++		}
++
++		// Checks if srcva is read-only in srcenv, and it is trying to
++		// permit writing in dstva
++		if (!(*pte & PTE_W) && (perm & PTE_W)) {
++			return -E_INVAL;
++		}
++
++		// Tries to map the physical page at dstva on dstenv address
++		// space
++		// Fails if there is no memory to allocate a page table, if
++		// needed
++		int error =
++		        page_insert(env->env_pgdir, pp, env->env_ipc_dstva, perm);
++		if (error < 0) {
++			return -E_NO_MEM;
++		}
++
++		// Page successfully transfered
++		env->env_ipc_perm = perm;
++	} else {
++		// The receiver isn't accepting a page
++		env->env_ipc_perm = 0;
++	}
++
++	// Deliver 'value' to the receiver
++	env->env_ipc_recving = false;
++	env->env_ipc_from = curenv->env_id;
++	env->env_ipc_value = value;
++	// The receiver has successfully received. Make it runnable
++	env->env_status = ENV_RUNNABLE;
++	return 0;
+ }
+ 
+ // Block until a value is ready.  Record that you want to receive
+@@ -259,7 +414,27 @@ static int
+ sys_ipc_recv(void *dstva)
+ {
+ 	// LAB 4: Your code here.
+-	panic("sys_ipc_recv not implemented");
++
++	// We mark the process as ENV_NOT_RUNNABLE, setting the flag
++	// thisenv-> env_ipc_recving to true.
++	curenv->env_ipc_recving = true;
++
++	uintptr_t va = (uintptr_t) dstva;
++	if (va < UTOP) {
++		// check if dstva is not page-aligned.
++		if (ROUNDUP(dstva, PGSIZE) != dstva) {
++			// This is an error: -E_INVAL if dstva < UTOP && dstva
++			// is not page-aligned.
++			return -E_INVAL;
++		}
++	}
++	// Because we want to receive.
++	curenv->env_ipc_dstva = dstva;
++	curenv->env_status = ENV_NOT_RUNNABLE;
++	// We put the return value manually. This never returns...
++	curenv->env_tf.tf_regs.reg_eax = 0;
++	sched_yield();
++	// panic("sys_ipc_recv not implemented");
+ 	return 0;
+ }
+ 
+@@ -272,6 +447,16 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
+ 	// LAB 3: Your code here.
+ 
+ 	switch (syscallno) {
++	case SYS_exofork:
++		return sys_exofork();
++	case SYS_env_set_status:
++		return sys_env_set_status(a1, a2);
++	case SYS_page_alloc:
++		return sys_page_alloc(a1, (void *) a2, a3);
++	case SYS_page_map:
++		return sys_page_map(a1, (void *) a2, a3, (void *) a4, a5);
++	case SYS_page_unmap:
++		return sys_page_unmap(a1, (void *) a2);
+ 	case SYS_cputs:
+ 		sys_cputs((char *) a1, a2);
+ 		return 0;
+@@ -281,8 +466,16 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
+ 		return sys_cgetc();
+ 	case SYS_env_destroy:
+ 		return sys_env_destroy(a1);
++	case SYS_yield:
++		sys_yield();
++	case SYS_env_set_pgfault_upcall:
++		return sys_env_set_pgfault_upcall(a1, (void *) a2);
++	case SYS_ipc_try_send:
++		return (int32_t) sys_ipc_try_send(
++		        (envid_t) a1, (uint32_t) a2, (void *) a3, (unsigned) a4);
++	case SYS_ipc_recv:
++		return (int32_t) sys_ipc_recv((void *) a1);
+ 	default:
+ 		return -E_INVAL;
+ 	}
+-	return -E_INVAL;
+ }
+diff --git a/kern/trap.c b/kern/trap.c
+index f913e45..b96635a 100644
+--- a/kern/trap.c
++++ b/kern/trap.c
+@@ -14,8 +14,6 @@
+ #include <kern/cpu.h>
+ #include <kern/spinlock.h>
+ 
+-static struct Taskstate ts;
+-
+ /* For debugging, so print_trapframe can distinguish between printing
+  * a saved trapframe and printing the current trapframe and print some
+  * additional information in the latter case.
+@@ -69,17 +67,19 @@ void trap_pagefault();
+ void trap_generalfault();
+ void trap_syscall();
+ void trap_breakpoint();
++void trap_irq();
+ void
+ trap_init(void)
+ {
+ 	extern struct Segdesc gdt[];
+ 
+ 	// LAB 3: Your code here.
+-	SETGATE(idt[T_DIVIDE], 1, GD_KT, trap_divzero, 0);
+-	SETGATE(idt[T_GPFLT], 1, GD_KT, trap_generalfault, 0);
+-	SETGATE(idt[T_PGFLT], 1, GD_KT, trap_pagefault, 0);
+-	SETGATE(idt[T_BRKPT], 1, GD_KT, trap_breakpoint, 3);
+-	SETGATE(idt[T_SYSCALL], 1, GD_KT, trap_syscall, 3);
++	SETGATE(idt[T_DIVIDE], 0, GD_KT, trap_divzero, 0);
++	SETGATE(idt[T_GPFLT], 0, GD_KT, trap_generalfault, 0);
++	SETGATE(idt[T_PGFLT], 0, GD_KT, trap_pagefault, 0);
++	SETGATE(idt[T_BRKPT], 0, GD_KT, trap_breakpoint, 3);
++	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_syscall, 3);
++	SETGATE(idt[IRQ_OFFSET + IRQ_TIMER], 0, GD_KT, trap_irq, 0);
+ 
+ 	// Per-CPU setup
+ 	trap_init_percpu();
+@@ -112,20 +112,28 @@ trap_init_percpu(void)
+ 	//
+ 	// LAB 4: Your code here:
+ 
++	int id = cpunum();
++	struct CpuInfo *cpu = &cpus[id];
++	struct Taskstate *ts = &cpu->cpu_ts;
++
+ 	// Setup a TSS so that we get the right stack
+ 	// when we trap to the kernel.
+-	ts.ts_esp0 = KSTACKTOP;
+-	ts.ts_ss0 = GD_KD;
+-	ts.ts_iomb = sizeof(struct Taskstate);
++	ts->ts_esp0 = KSTACKTOP - id * (KSTKSIZE + KSTKGAP);
++	ts->ts_ss0 = GD_KD;
++	ts->ts_iomb = sizeof(struct Taskstate);
+ 
+ 	// Initialize the TSS slot of the gdt.
+-	gdt[GD_TSS0 >> 3] =
+-	        SEG16(STS_T32A, (uint32_t)(&ts), sizeof(struct Taskstate) - 1, 0);
+-	gdt[GD_TSS0 >> 3].sd_s = 0;
++	// int idx = GD_TSS0 + id;
++	// int seg = idx << 3;
++	int idx = (GD_TSS0 >> 3) + id;
++	int seg = idx << 3;
++	gdt[idx] =
++	        SEG16(STS_T32A, (uint32_t)(ts), sizeof(struct Taskstate) - 1, 0);
++	gdt[idx].sd_s = 0;
+ 
+ 	// Load the TSS selector (like other segment selectors, the
+ 	// bottom three bits are special; we leave them 0)
+-	ltr(GD_TSS0);
++	ltr(seg);
+ 
+ 	// Load the IDT
+ 	lidt(&idt_pd);
+@@ -219,6 +227,13 @@ trap_dispatch(struct Trapframe *tf)
+ 	// interrupt using lapic_eoi() before calling the scheduler!
+ 	// LAB 4: Your code here.
+ 
++	// provide handlers for IRQ
++	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
++		lapic_eoi();
++		sched_yield();
++		return;
++	}
++
+ 	// Unexpected trap: The user process or the kernel has a bug.
+ 	print_trapframe(tf);
+ 	if (tf->tf_cs == GD_KT)
+@@ -255,6 +270,8 @@ trap(struct Trapframe *tf)
+ 		// Acquire the big kernel lock before doing any
+ 		// serious kernel work.
+ 		// LAB 4: Your code here.
++		lock_kernel();
++
+ 		assert(curenv);
+ 
+ 		// Garbage collect if current enviroment is a zombie
+@@ -337,6 +354,39 @@ page_fault_handler(struct Trapframe *tf)
+ 	//   (the 'tf' variable points at 'curenv->env_tf').
+ 
+ 	// LAB 4: Your code here.
++	if (curenv->env_pgfault_upcall) {
++		// First check permissions
++		user_mem_assert(curenv,
++		                (void *) UXSTACKTOP - PGSIZE,
++		                PGSIZE,
++		                PTE_P | PTE_W | PTE_U);
++
++		uint32_t uxstack = UXSTACKTOP;
++
++		// Check if is a recursive page fault
++		if (tf->tf_esp < UXSTACKTOP && tf->tf_esp >= UXSTACKTOP - PGSIZE) {
++			uint32_t word = 4;
++			uxstack = tf->tf_esp - word;
++		}
++
++		uxstack = uxstack - sizeof(struct UTrapframe);
++
++		struct UTrapframe *u = (struct UTrapframe *) uxstack;
++
++		// Fill user trap frame
++		u->utf_fault_va = fault_va;
++		u->utf_err = tf->tf_err;
++		u->utf_regs = tf->tf_regs;
++		u->utf_eip = tf->tf_eip;
++		u->utf_eflags = tf->tf_eflags;
++		u->utf_esp = tf->tf_esp;
++
++		tf->tf_esp = uxstack;
++		tf->tf_eip = (uintptr_t) curenv->env_pgfault_upcall;
++		env_run(curenv);
++
++		panic("This code can't be reach");
++	}
+ 
+ 	// Destroy the environment that caused the fault.
+ 	cprintf("[%08x] user fault va %08x ip %08x\n",
+diff --git a/kern/trapentry.S b/kern/trapentry.S
+index e2a9bfc..8ee98cf 100644
+--- a/kern/trapentry.S
++++ b/kern/trapentry.S
+@@ -52,6 +52,7 @@ TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
+ TRAPHANDLER(trap_generalfault, T_GPFLT);
+ TRAPHANDLER(trap_pagefault, T_PGFLT);
+ TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
++TRAPHANDLER_NOEC(trap_irq, IRQ_OFFSET + IRQ_TIMER);
+ 
+ /*
+  * Lab 3: Your code here for _alltraps
+diff --git a/lib/fork.2.c b/lib/fork.2.c
+new file mode 100644
+index 0000000..8b46b00
+--- /dev/null
++++ b/lib/fork.2.c
+@@ -0,0 +1,169 @@
++// implement fork from user space
++
++#include <inc/string.h>
++#include <inc/lib.h>
++
++// PTE_COW marks copy-on-write page table entries.
++// It is one of the bits explicitly allocated to user processes (PTE_AVAIL).
++#define PTE_COW		0x800
++
++//
++// Custom page fault handler - if faulting page is copy-on-write,
++// map in our own private writable copy.
++//
++static void
++pgfault(struct UTrapframe *utf)
++{
++	// cprintf("page fault at %x, eip %x\n", utf->utf_fault_va, utf->utf_eip);
++	uint32_t err = utf->utf_err;
++	if (!(err & FEC_WR))
++		panic("[fork] pgfault received fault that wasn't a write\n");
++
++	void *flt_addr = (void *) utf->utf_fault_va;
++	if (!(uvpt[PGNUM(flt_addr)] & PTE_COW))
++		panic("[fork] pgfault received a write fault for non-COW page\n");
++
++	// Allocate a new page, map it at a temporary location (PFTEMP),
++	// copy the data from the old page to the new page, then move the new
++	// page to the old page's address.
++	int r;
++	// Allocate new page
++	if ((r = sys_page_alloc(0, PFTEMP, PTE_U|PTE_P|PTE_W)))
++		panic("[fork] pgfault:sys_page_alloc failed %x for addr: %x", r, flt_addr);
++
++	// Copy COW page contents into newly-allocated page
++	memcpy(PFTEMP, ROUNDDOWN(flt_addr, PGSIZE), PGSIZE);
++
++	// Insert newly-allocated-and-populated page into the place of the COW page
++	if ((r = sys_page_map(0, PFTEMP, 0, ROUNDDOWN(flt_addr, PGSIZE), PTE_U|PTE_P|PTE_W)))
++		panic("[fork] pgfault:sys_page_map failed %x for addr: %x", r, flt_addr);
++
++	// De-allocate
++	if ((r = sys_page_unmap(0, PFTEMP)))
++		panic("[fork] pgfault:sys_page_unmap failed %x for addr: %x", r, PFTEMP);
++}
++
++//
++// Map our virtual address va into the target envid
++// at the same virtual address.  If the page is writable or copy-on-write,
++// the new mapping must be created copy-on-write, and then our mapping must be
++// marked copy-on-write as well.  (Exercise: Why do we need to mark ours
++// copy-on-write again if it was already copy-on-write at the beginning of
++// this function?)
++//
++// Returns: 0 on success, < 0 on error.
++// It is also OK to panic on error.
++//
++static int
++duppage(envid_t envid, uintptr_t va)
++{
++	int r;
++	uint32_t perm = uvpt[PGNUM(va)] & PTE_SYSCALL;
++	if (perm & PTE_W || perm & PTE_COW) {
++		// Writable
++		// Mark COW in child
++		if ((r = sys_page_map(0, (void *)va, envid, (void *)va, PTE_U|PTE_P|PTE_COW)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++		// Mark COW in parent (b/c it may have just been W)
++		if ((r = sys_page_map(0, (void *)va, 0, (void *)va, PTE_U|PTE_P|PTE_COW)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++	} else {
++		// Read-only
++		if ((r = sys_page_map(0, (void *)va, envid, (void *)va, PTE_U|PTE_P)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++	}
++	return 0;
++}
++
++//
++// User-level fork with copy-on-write.
++// Set up our page fault handler appropriately.
++// Create a child.
++// Copy our address space and page fault handler setup to the child.
++// Then mark the child as runnable and return.
++//
++// Returns: child's envid to the parent, 0 to the child, < 0 on error.
++// It is also OK to panic on error.
++//
++// Hint:
++//   Neither user exception stack should ever be marked copy-on-write,
++//   so you must allocate a new page for the child's user exception stack.
++//
++envid_t
++fork(void)
++{
++	set_pgfault_handler(pgfault);
++
++	// Allocate a new child environment.
++	// The kernel will initialize it with a copy of our register state,
++	// so that the child will appear to have called sys_exofork() too -
++	// except that in the child, this "fake" call to sys_exofork()
++	// will return 0 instead of the envid of the child.
++	envid_t envid = sys_exofork();
++	if (envid < 0)
++		panic("sys_exofork: %e\n", envid);
++
++	if (envid == 0) {
++		// We're the child.
++		// The copied value of the global variable 'thisenv'
++		// is no longer valid (it refers to the parent!).
++		// Fix it and return 0.
++		thisenv = &envs[ENVX(sys_getenvid())];
++		return 0;
++	}
++
++	// We're the parent.
++	// Copy address space
++	uintptr_t va;
++	for (va = 0; va < USTACKTOP; va += PGSIZE) {
++		// TODO: Could optimize so if the PDE is not present,
++		// skip the whole thing instead of still looping through
++		// all its PTEs.
++		if (uvpd[PDX(va)] & PTE_P &&  // see memlayout.h for uvpd/uvpt explanation
++				uvpd[PDX(va)] & PTE_U &&
++		  	uvpt[PGNUM(va)] & PTE_P &&
++		  	uvpt[PGNUM(va)] & PTE_U) {
++			duppage(envid, va);
++		}
++	}
++
++	// Allocate a new user exception stack for the child
++	sys_page_alloc(envid, (void *)(UXSTACKTOP - PGSIZE), PTE_U|PTE_P|PTE_W);
++
++	// Assembly language pgfault entrypoint defined in lib/pfentry.S.
++	// Why can't this call to set_pgfault_upcall be executed in the child
++	// code above, before fixing `thisenv`?
++	// If you look at the assembly for lib.h:sys_exofork, you'll notice it
++	// makes the `int` syscall and then immediately modifies a stack
++	// variable.
++	// When handling sys_exofork calls, the kernel allocates a new env
++	// and copies the parent's register state to it (see syscall.c:sys_exofork).
++	// The parent then returns from sys_exofork above and copies its address space
++	// into the child and marks all writeable pages COW.
++	// Thus, when the child finally runs (after the parent returns from `fork`)
++	// it will try to return from sys_exofork (just as the parent did, except with
++	// a 0 return value) and thus try to modify the aforementioned stack variable.
++	// This stack page was just marked COW instead of W, which triggers a
++	// userland page fault, but it hasn't gotten the chance to execute any of the
++	// code after the `sys_exofork` call, and thus it cannot register its own
++	// page fault handler--the parent must do it before the child can return
++	// from `sys_exofork`.
++	extern void _pgfault_upcall(void);
++	int r;
++	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)))
++		panic("[fork] sys_env_set_pgfault_upcall: %x", r);
++
++	// Start the child environment running
++	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
++		panic("sys_env_set_status: %e", r);
++
++	return envid;
++}
++
++// Challenge!
++int
++sfork(void)
++{
++	panic("sfork not implemented");
++	return -E_INVAL;
++}
+\ No newline at end of file
+diff --git a/lib/fork.c b/lib/fork.c
+index d32749e..88be28f 100644
+--- a/lib/fork.c
++++ b/lib/fork.c
+@@ -3,6 +3,9 @@
+ #include <inc/string.h>
+ #include <inc/lib.h>
+ 
++static envid_t fork_v0(void);
++static void dup_or_share(envid_t envid, void *addr, int perm);
++
+ // PTE_COW marks copy-on-write page table entries.
+ // It is one of the bits explicitly allocated to user processes (PTE_AVAIL).
+ #define PTE_COW 0x800
+@@ -14,27 +17,34 @@
+ static void
+ pgfault(struct UTrapframe *utf)
+ {
+-	void *addr = (void *) utf->utf_fault_va;
+-	uint32_t err = utf->utf_err;
+ 	int r;
++	// cprintf("page fault at %x, eip %x\n", utf->utf_fault_va,
++	// utf->utf_eip);
++	if (!(utf->utf_err & FEC_WR))
++		panic("[fork] pgfault received fault that wasn't a write\n");
+ 
+-	// Check that the faulting access was (1) a write, and (2) to a
+-	// copy-on-write page.  If not, panic.
+-	// Hint:
+-	//   Use the read-only page table mappings at uvpt
+-	//   (see <inc/memlayout.h>).
++	void *flt_addr = (void *) utf->utf_fault_va;
++	if (!(uvpt[PGNUM(flt_addr)] & PTE_COW))
++		panic("[fork] pgfault received a write fault for non-COW "
++		      "page\n");
+ 
+-	// LAB 4: Your code here.
++	if ((r = sys_page_alloc(0, UTEMP, PTE_U | PTE_P | PTE_W)))
++		panic("[fork] pgfault:sys_page_alloc failed %x for addr: %x",
++		      r,
++		      flt_addr);
+ 
+-	// Allocate a new page, map it at a temporary location (PFTEMP),
+-	// copy the data from the old page to the new page, then move the new
+-	// page to the old page's address.
+-	// Hint:
+-	//   You should make three system calls.
++	memcpy(UTEMP, ROUNDDOWN(flt_addr, PGSIZE), PGSIZE);
+ 
+-	// LAB 4: Your code here.
++	if ((r = sys_page_map(
++	             0, UTEMP, 0, ROUNDDOWN(flt_addr, PGSIZE), PTE_U | PTE_P | PTE_W)))
++		panic("[fork] pgfault:sys_page_map failed %x for addr: %x",
++		      r,
++		      flt_addr);
+ 
+-	panic("pgfault not implemented");
++	if ((r = sys_page_unmap(0, UTEMP)))
++		panic("[fork] pgfault:sys_page_unmap failed %x for addr: %x",
++		      r,
++		      UTEMP);
+ }
+ 
+ //
+@@ -54,7 +64,27 @@ duppage(envid_t envid, unsigned pn)
+ 	int r;
+ 
+ 	// LAB 4: Your code here.
+-	panic("duppage not implemented");
++	void *va = (void *) (pn * PGSIZE);
++	uint32_t perm = uvpt[pn] & PTE_SYSCALL;
++	if (perm & PTE_W || perm & PTE_COW) {
++		// Writable
++		// Mark COW in child
++		if ((r = sys_page_map(0,
++		                      (void *) va,
++		                      envid,
++		                      (void *) va,
++		                      PTE_U | PTE_P | PTE_COW)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++		// Mark COW in parent (b/c it may have just been W)
++		if ((r = sys_page_map(
++		             0, (void *) va, 0, (void *) va, PTE_U | PTE_P | PTE_COW)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++	} else {
++		// Read-only
++		if ((r = sys_page_map(
++		             0, (void *) va, envid, (void *) va, PTE_U | PTE_P)))
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++	}
+ 	return 0;
+ }
+ 
+@@ -78,7 +108,116 @@ envid_t
+ fork(void)
+ {
+ 	// LAB 4: Your code here.
+-	panic("fork not implemented");
++	// return fork_v0();
++	// panic("fork not implemented");
++	int r;
++	set_pgfault_handler(pgfault);
++
++
++	envid_t envid = sys_exofork();
++	if (envid < 0)
++		panic("sys_exofork: %e\n", envid);
++
++	if (envid == 0) {
++		thisenv = &envs[ENVX(sys_getenvid())];
++		return 0;
++	}
++
++	uintptr_t va;
++	for (va = 0; va < USTACKTOP; va += PGSIZE) {
++		if (!(uvpd[PDX(va)] & PTE_P) || !(uvpt[PGNUM(va)] & PTE_P)) {
++			continue;
++		}
++		if (uvpd[PDX(va)] & PTE_U && uvpt[PGNUM(va)] & PTE_U) {
++			duppage(envid, PGNUM(va));
++		}
++	}
++
++	// Allocate a new user exception stack for the child
++	sys_page_alloc(envid, (void *) (UXSTACKTOP - PGSIZE), PTE_U | PTE_P | PTE_W);
++
++	extern void _pgfault_upcall(void);
++
++	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)))
++		panic("[fork] sys_env_set_pgfault_upcall: %x", r);
++
++	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
++		panic("sys_env_set_status: %e", r);
++
++	return envid;
++}
++
++envid_t
++fork_v0(void)
++{
++	int ret;
++
++	uint32_t pdeno, pteno;
++	envid_t envid;
++	uint32_t pgnum;
++	uintptr_t *pgaddr;
++	envid = sys_exofork();
++
++	if (envid < 0)
++		panic("sys_exofork: %e\n", envid);
++
++	if (envid == 0) {
++		// We're the child.
++		// The copied value of the global variable 'thisenv'
++		// is no longer valid (it refers to the parent!).
++		// Fix it and return 0.
++		thisenv = &envs[ENVX(sys_getenvid())];
++		return 0;
++	}
++	for (pdeno = 0; pdeno < PDX(UTOP); pdeno++) {
++		if (!(uvpd[pdeno] & PTE_P))
++			continue;
++		// The PTE for page number N is stored in uvpt[N]
++		for (pteno = 0; pteno < NPTENTRIES; pteno++) {
++			pgaddr = PGADDR(pdeno, pteno, 0);
++			pgnum = PGNUM(pgaddr);
++			if (uvpt[pgnum] & PTE_P) {
++				dup_or_share(envid,
++				             pgaddr,
++				             uvpt[pgnum] & PTE_SYSCALL);
++			}
++		}
++	}
++	// Also copy the stack we are currently running on.
++	dup_or_share(envid, ROUNDDOWN(&ret, PGSIZE), PTE_P | PTE_U | PTE_W);
++
++	// Start the child environment running
++	if ((ret = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
++		panic("sys_env_set_status: %e", ret);
++	return envid;
++}
++
++static void
++dup_or_share(envid_t envid, void *addr, int perm)
++{
++	int r;
++
++	if (!(perm & PTE_W)) {  // SOLO LECTURA
++		if ((r = sys_page_map(0, addr, envid, addr, perm)) <
++		    0)  // MAPPEO DEL HIJO AL PADRE (UTILIZO LA MISMA DIRECCION
++		        // VIRTUAL)
++			panic("duppage: sys_page_map failed for %x: %d\n", addr, r);
++		return;
++	}
++	// LO QUE SIGUE ES PARA
++	if ((r = sys_page_alloc(envid, addr, perm)) <
++	    0)  // RESERVO UNA PAGINA EN EL HIJO CON DIRECCION VIRTUAL addr
++		panic("sys_page_alloc: %e", r);
++
++	//  // MAPPEO DEL HIJO AL PADRE (EN LA DIRECCION UTMP ??? COMO ES QUE
++	//  FUNCIONA ESTO?)
++	if ((r = sys_page_map(envid, addr, 0, UTEMP, perm)) < 0)
++		panic("sys_page_map: %e", r);
++
++	memmove(UTEMP, addr, PGSIZE);
++
++	if ((r = sys_page_unmap(0, UTEMP)) < 0)
++		panic("sys_page_unmap: %e", r);  // NO SE SI ESTA BIEN ESTO!!!!
+ }
+ 
+ // Challenge!
+diff --git a/lib/ipc.c b/lib/ipc.c
+index 2e222b9..d950545 100644
+--- a/lib/ipc.c
++++ b/lib/ipc.c
+@@ -23,8 +23,25 @@ int32_t
+ ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
+ {
+ 	// LAB 4: Your code here.
+-	panic("ipc_recv not implemented");
+-	return 0;
++	if (!pg) {
++		// we define it as a kernbase.
++		pg = (void *) 0xFFFFFFFF;
++	}
++	if (sys_ipc_recv(pg)) {
++		// if from_env_store != 0 we can
++		// detect if the return value is an error o not.
++		*from_env_store = 0;
++		*perm_store = 0;
++		return -E_INVAL;
++	}
++	if (perm_store) {
++		// if perm_store != 0 we can check the permissions.
++		*perm_store = thisenv->env_ipc_perm;
++	}
++	if (from_env_store) {
++		*from_env_store = thisenv->env_ipc_from;
++	}
++	return thisenv->env_ipc_value;
+ }
+ 
+ // Send 'val' (and 'pg' with 'perm', if 'pg' is nonnull) to 'toenv'.
+@@ -39,7 +56,18 @@ void
+ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
+ {
+ 	// LAB 4: Your code here.
+-	panic("ipc_send not implemented");
++	int return_value;
++	// We use a while cycle who call sys_ipc_try_send until the message has
++	// been delivered.
++	// This is a non-blocking call.
++	while ((return_value = sys_ipc_try_send(to_env, val, pg, perm)) ==
++	       -E_IPC_NOT_RECV) {
++		sys_yield();
++	}
++	// It should panic() on any error other than -E_IPC_NOT_RECV.
++	if (return_value) {
++		panic("return value of ipc_send is: %e", return_value);
++	}
+ }
+ 
+ // Find the first environment of the given type.  We'll use this to
+diff --git a/lib/pfentry.S b/lib/pfentry.S
+index f40aeeb..db17ff1 100644
+--- a/lib/pfentry.S
++++ b/lib/pfentry.S
+@@ -65,18 +65,31 @@ _pgfault_upcall:
+ 	// ways as registers become unavailable as scratch space.
+ 	//
+ 	// LAB 4: Your code here.
++    movl %esp, %eax
++    movl 40(%esp), %ebx
++    movl 48(%esp), %esp
++    pushl %ebx
++    movl %esp, 48(%eax)
+ 
+ 	// Restore the trap-time registers.  After you do this, you
+ 	// can no longer modify any general-purpose registers.
+ 	// LAB 4: Your code here.
++	movl %eax, %esp
++	addl $4, %esp
++	addl $4, %esp
++	popal
++	addl $4, %esp
+ 
+ 	// Restore eflags from the stack.  After you do this, you can
+ 	// no longer use arithmetic operations or anything else that
+ 	// modifies eflags.
+ 	// LAB 4: Your code here.
++	popfl
+ 
+ 	// Switch back to the adjusted trap-time stack.
+ 	// LAB 4: Your code here.
++    popl %esp
+ 
+ 	// Return to re-execute the instruction that faulted.
+ 	// LAB 4: Your code here.
++    ret
+\ No newline at end of file
+diff --git a/lib/pgfault.c b/lib/pgfault.c
+index a975518..0d0a4bb 100644
+--- a/lib/pgfault.c
++++ b/lib/pgfault.c
+@@ -29,7 +29,15 @@ set_pgfault_handler(void (*handler)(struct UTrapframe *utf))
+ 	if (_pgfault_handler == 0) {
+ 		// First time through!
+ 		// LAB 4: Your code here.
+-		panic("set_pgfault_handler not implemented");
++		int status = sys_page_alloc(thisenv->env_id, (void *)UXSTACKTOP - PGSIZE, PTE_P | PTE_W | PTE_U);
++		if(status < 0){
++			panic("syscall sys_page_alloc returned %d", status);
++		}
++
++		status = sys_env_set_pgfault_upcall(thisenv->env_id,_pgfault_upcall);
++		if(status < 0){
++			panic("syscall sys_env_set_pgfault_upcall returned %d", status);
++		}
+ 	}
+ 
+ 	// Save handler pointer for assembly to call.
+diff --git a/user/yield.c b/user/yield.c
+index 6f45bdb..be6ee22 100644
+--- a/user/yield.c
++++ b/user/yield.c
+@@ -7,11 +7,12 @@ umain(int argc, char **argv)
+ {
+ 	int i;
+ 
+-	cprintf("Hello, I am environment %08x.\n", thisenv->env_id);
++	cprintf("Hello, I am environment %08x, cpu %d.\n",
++			thisenv->env_id, thisenv->env_cpunum);
+ 	for (i = 0; i < 5; i++) {
+ 		sys_yield();
+-		cprintf("Back in environment %08x, iteration %d.\n",
+-			thisenv->env_id, i);
++		cprintf("Back in environment %08x, iteration %d, cpu %d.\n",
++				thisenv->env_id, i, thisenv->env_cpunum);
+ 	}
+ 	cprintf("All done in environment %08x.\n", thisenv->env_id);
+ }
