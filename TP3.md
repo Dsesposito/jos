@@ -31,13 +31,23 @@ Esto se debe a que si observamos la definición de la macro vemos que:
 
 Entonces si el valor de la operacion resto devuelve 0, el case 0 queda duplicado y esto falla en tiempo de compilación.
 
-
 Tarea: env_return
 -----------------
+
+**PREGUNTA:**
+
 al terminar un proceso su función umain() ¿dónde retoma la ejecución el kernel? Describir la secuencia de llamadas desde que termina umain() hasta que el kernel dispone del proceso.
+¿en qué cambia la función env_destroy() en este TP, respecto al TP anterior?
 
-El scheduller elije otro environment para ejecutar. Si no hay mas environments el scheduller invoca el monitor del kernel.
+**RESPUESTA:**
 
+umain() finaliza con una llamada a sys_env_destroy(). Esa función termina invocando a env_destroy() que detecta que el environment e eliminar es curenv y se encuentra en estado "ENV_RUNNING". Procederá a liberarlo por medio de la función env_free() y luego incova al sheduller mediante sched_yield().  
+El scheduller elije otro environment para ejecutar. Realiza un switch al primer environment encontrado cuyo estado sea ENV_RUNNABLE. Si no hay mas environments el scheduller invoca el monitor del kernel.
+
+La función env_destroy cambia mucho entre el tp anterior y el actual.
+En el TP anterior cuando se invocaba a env_destroy destruia directamente el único environment que existia. Finalizaba invocando indefinidamente al monitor del kernel.
+En el TP actual la función es más compleja: Contempla el caso en que el environment posea un estado "ENV_RUNNING" y además no sea curenv. Son environments "zombies" y le aplica un estado "ENV_DYING" y retorna. No lo libera.
+En cualquier otro caso lo libera, y si además si el environment es igual a curenv entonces setea curenv a NULL y luego invoca a la función sched_yield(), es decir, no invoca directamente el monitor del kernel como en el anterior caso. 
 
 Tarea: sys_yield
 ----------------
@@ -106,8 +116,6 @@ Luego de las 3 sentencias de "Hello, I am environment" se ejecuta el primer yiel
 El proceso continua de forma similar hasta que finalizan el for y se liberan los environments.
 Finalmente como no hay más environmentes para ejecutar, el scheduller invoca el monitor del kernel: "Welcome to the JOS kernel monitor!". 
 
-
-<<<<<<< HEAD
 Tarea: envid2env
 ----------------
 
@@ -116,6 +124,7 @@ Tarea: envid2env
 Responder qué ocurre:
 en JOS, si un proceso llama a sys_env_destroy(0)
 en Linux, si un proceso llama a kill(0, 9)
+
 **RESPUESTA:**
 
 En ambos casos se pide que se detruya el proceso que invoca a dicha función, por ende
@@ -123,27 +132,82 @@ sys_env_destroy(0) : imprime por pantalla "[pid] exiting gracefully"
 kill(0,9) : Envia la señal de kill a todos los procesos que pertenezcan al mismo group id
 
 **PREGUNTA:**
+
 E ídem para:
 JOS: sys_env_destroy(-1)
 Linux: kill(-1, 9)
+
 **RESPUESTA:**
+
 sys_env_destroy(-1) : 
 kill(-1,9) : Se envia la señal kill -9 a todos los procesos excluidos los de sistema, a los cuales se tiene permiso de enviar
 
-Tarea: dumbfork
-----------------
+
+Tarea: ipc_recv
+---------------
 
 **PREGUNTA:**
-Si, antes de llamar a dumbfork(), el proceso se reserva a sí mismo una página con sys_page_alloc() ¿se propagará una copia al proceso hijo? ¿Por qué?
+
+Un proceso podría intentar enviar el valor númerico -E_INVAL vía ipc_send(). ¿Cómo es posible distinguir si es un error, o no? En estos casos:
+
 **RESPUESTA:**
+
+// Versión A
+<code>
+envid_t src = -1;
+int r = ipc_recv(&src, 0, NULL);
+
+if (r < 0)
+  if (!src)
+    puts("Hubo error.");
+  else
+    puts("Valor negativo correcto.")
+</code>
+
+// Versión B
+<code>
+int r = ipc_recv(NULL, 0, NULL);
+
+if (r < 0)
+  if (/* ??? */)
+    puts("Hubo error.");
+  else
+    puts("Valor negativo correcto.")
+</code>
+En la versión B no es posible detectar un error ya que siempre el valor de from_env_store será NULL sea o no sea error. No contamos con otra variable a la cual chequear y verificar en base a su valor si se trata de un error o no.
+
+Tarea: sys_ipc_try_send
+-----------------------
+
+**PREGUNTA:**
+
+¿Cómo se podría hacer bloqueante esta llamada? Esto es: qué estrategia de implementación se podría usar para que, si un proceso A intenta a enviar a B, pero B no está esperando un mensaje, el proceso A sea puesto en estado ENV_NOT_RUNNABLE, y sea despertado una vez B llame a ipc_recv().
+
+**RESPUESTA:**
+
+La llamada podría hacerse bloqueante modificando la función ipc_send para que setee curenv en estado "ENV_NO_RUNNABLE" cuando obtiene como respuesta -E_IPC_NOT_RECV.
+Cuando ejecutamos ipc_recv() debemos setear como "ENV_RUNNABLE" el environment que intentaba enviar un mensaje y el destinatario no lo estaba esperando.
+
+Tarea: dumbfork
+---------------
+
+**PREGUNTA:**
+
+Si, antes de llamar a dumbfork(), el proceso se reserva a sí mismo una página con sys_page_alloc() ¿se propagará una copia al proceso hijo? ¿Por qué?
+
+**RESPUESTA:**
+
 dumbfork ejecuta la siguiente instrucción:
 	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
 		duppage(envid, addr);
 Lo que implica que se estará haciendo un copia del espacio de memoria del padre para el proceso hijo. Por ende si el padre ejecuta antes del dumbfork el sys_page_alloc, se propagará uan copia al hijo.
 
 **PREGUNTA:**
+
 ¿Se preserva el estado de solo-lectura en las páginas copiadas? Mostrar, con código en espacio de usuario, cómo saber si una dirección de memoria es modificable por el proceso, o no. (Ayuda: usar las variables globales uvpd y/o uvpt.)
+
 **RESPUESTA:**
+
 En el codigo se ejecuta duppage para reservar las paginas en memoria, dicha función invoca a :
  sys_page_alloc(dstenv, addr, PTE_P|PTE_U|PTE_W) : lo cual implica que la pagina se creará con permisos de escritura simpre
  Utilizando las variables globales uvpd y/o uvpt se puede saber si una direccion es modificable por el proceso usuario de la siguiente manera
@@ -256,7 +320,8 @@ En el archivo kern/mpentry.S se puede leer:
 
 Responder con redondeo a 12 bits, justificando desde qué región de memoria se está ejecutando este código.
 
- * ¿Se detiene en algún momento la ejecución si se pone un breakpoint en mpentry_start? ¿Por qué?                                                           
+ * ¿Se detiene en algún momento la ejecución si se pone un breakpoint en mpentry_start? ¿Por qué?    
+
 **RESPUESTA:**  
 
 La funcion boot_aps llama a la función lapic_startap pasandole por parámetro la dirección de memoria fisíca del código que debe ejecutar el AP . Luego la función lapic_startap le envia al procesdador la startup IPI para que el procesador arranque y ejecute el código de inicio.  

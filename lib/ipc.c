@@ -24,14 +24,18 @@ ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
 {
 	// LAB 4: Your code here.
 	if (!pg){
+		// we define it as a kernbase.
 		pg = (void *)0xFFFFFFFF;
 	}
 	if (sys_ipc_recv(pg)){
+		// if from_env_store != 0 we can 
+		// detect if the return value is an error o not.   
 		*from_env_store = 0;
 		*perm_store = 0;
 		return -E_INVAL;
 	}
 	if (perm_store){
+		// if perm_store != 0 we can check the permissions. 
 		*perm_store = thisenv->env_ipc_perm;
 	}
 	if (from_env_store){
@@ -53,6 +57,8 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 {
 	// LAB 4: Your code here.
 	int return_value;
+	// We use a while cycle who call sys_ipc_try_send until the message has been delivered.
+	// This is a non-blocking call. 
 	while((return_value = sys_ipc_try_send(to_env, val, pg, perm)) == -E_IPC_NOT_RECV) {
 	    sys_yield();
 	}
