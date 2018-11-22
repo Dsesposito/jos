@@ -123,10 +123,10 @@ trap_init_percpu(void)
 	ts->ts_iomb = sizeof(struct Taskstate);
 
 	// Initialize the TSS slot of the gdt.
-	//int idx = GD_TSS0 + id;
-	//int seg = idx << 3;
-    int idx = (GD_TSS0 >> 3) + id;
-    int seg = idx << 3;
+	// int idx = GD_TSS0 + id;
+	// int seg = idx << 3;
+	int idx = (GD_TSS0 >> 3) + id;
+	int seg = idx << 3;
 	gdt[idx] =
 	        SEG16(STS_T32A, (uint32_t)(ts), sizeof(struct Taskstate) - 1, 0);
 	gdt[idx].sd_s = 0;
@@ -226,13 +226,13 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
-	
+
 	// provide handlers for IRQ
 	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
 		lapic_eoi();
 		sched_yield();
 		return;
-  	}
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
@@ -354,24 +354,26 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
-	if(curenv->env_pgfault_upcall){
-
-		//First check permissions
-		user_mem_assert(curenv,(void *)UXSTACKTOP - PGSIZE,PGSIZE,PTE_P | PTE_W | PTE_U);
+	if (curenv->env_pgfault_upcall) {
+		// First check permissions
+		user_mem_assert(curenv,
+		                (void *) UXSTACKTOP - PGSIZE,
+		                PGSIZE,
+		                PTE_P | PTE_W | PTE_U);
 
 		uint32_t uxstack = UXSTACKTOP;
 
-		//Check if is a recursive page fault
-		if(tf->tf_esp < UXSTACKTOP && tf->tf_esp >= UXSTACKTOP-PGSIZE){
+		// Check if is a recursive page fault
+		if (tf->tf_esp < UXSTACKTOP && tf->tf_esp >= UXSTACKTOP - PGSIZE) {
 			uint32_t word = 4;
-			uxstack	= tf->tf_esp - word;
+			uxstack = tf->tf_esp - word;
 		}
 
 		uxstack = uxstack - sizeof(struct UTrapframe);
 
-		struct UTrapframe *u = (struct UTrapframe*) uxstack;
+		struct UTrapframe *u = (struct UTrapframe *) uxstack;
 
-		//Fill user trap frame
+		// Fill user trap frame
 		u->utf_fault_va = fault_va;
 		u->utf_err = tf->tf_err;
 		u->utf_regs = tf->tf_regs;
@@ -380,11 +382,10 @@ page_fault_handler(struct Trapframe *tf)
 		u->utf_esp = tf->tf_esp;
 
 		tf->tf_esp = uxstack;
-		tf->tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		tf->tf_eip = (uintptr_t) curenv->env_pgfault_upcall;
 		env_run(curenv);
 
 		panic("This code can't be reach");
-
 	}
 
 	// Destroy the environment that caused the fault.
