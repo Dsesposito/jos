@@ -306,7 +306,8 @@ region_alloc(struct Env *e, void *va, size_t len)
 	uintptr_t addr_end = ROUNDUP((uintptr_t) va + len, PGSIZE);
 	while (addr_start < addr_end) {
 		struct PageInfo *page = page_alloc(0);
-		if (page == NULL) { /* panic attack !!! : not enought memory !! */
+		if (page ==
+		    NULL) { /* panic attack !!! : not enought memory !! */
 			panic("region_alloc: not enough memory for page_alloc");
 		}
 		page_insert(e->env_pgdir,
