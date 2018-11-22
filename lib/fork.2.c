@@ -3,12 +3,9 @@
 #include <inc/string.h>
 #include <inc/lib.h>
 
-static envid_t fork_v0(void);
-static void dup_or_share(envid_t envid, void *addr, int perm);
-
 // PTE_COW marks copy-on-write page table entries.
 // It is one of the bits explicitly allocated to user processes (PTE_AVAIL).
-#define PTE_COW 0x800
+#define PTE_COW		0x800
 
 //
 // Custom page fault handler - if faulting page is copy-on-write,
@@ -17,29 +14,37 @@ static void dup_or_share(envid_t envid, void *addr, int perm);
 static void
 pgfault(struct UTrapframe *utf)
 {
-	int r;
 	// cprintf("page fault at %x, eip %x\n", utf->utf_fault_va, utf->utf_eip);
-	if (!(utf->utf_err & FEC_WR))
+	uint32_t err = utf->utf_err;
+	if (!(err & FEC_WR))
 		panic("[fork] pgfault received fault that wasn't a write\n");
 
 	void *flt_addr = (void *) utf->utf_fault_va;
 	if (!(uvpt[PGNUM(flt_addr)] & PTE_COW))
 		panic("[fork] pgfault received a write fault for non-COW page\n");
 
-	if ((r = sys_page_alloc(0, UTEMP, PTE_U|PTE_P|PTE_W)))
+	// Allocate a new page, map it at a temporary location (PFTEMP),
+	// copy the data from the old page to the new page, then move the new
+	// page to the old page's address.
+	int r;
+	// Allocate new page
+	if ((r = sys_page_alloc(0, PFTEMP, PTE_U|PTE_P|PTE_W)))
 		panic("[fork] pgfault:sys_page_alloc failed %x for addr: %x", r, flt_addr);
 
-	memcpy(UTEMP, ROUNDDOWN(flt_addr, PGSIZE), PGSIZE);
+	// Copy COW page contents into newly-allocated page
+	memcpy(PFTEMP, ROUNDDOWN(flt_addr, PGSIZE), PGSIZE);
 
-	if ((r = sys_page_map(0, UTEMP, 0, ROUNDDOWN(flt_addr, PGSIZE), PTE_U|PTE_P|PTE_W)))
+	// Insert newly-allocated-and-populated page into the place of the COW page
+	if ((r = sys_page_map(0, PFTEMP, 0, ROUNDDOWN(flt_addr, PGSIZE), PTE_U|PTE_P|PTE_W)))
 		panic("[fork] pgfault:sys_page_map failed %x for addr: %x", r, flt_addr);
 
-	if ((r = sys_page_unmap(0, UTEMP)))
-		panic("[fork] pgfault:sys_page_unmap failed %x for addr: %x", r, UTEMP);
+	// De-allocate
+	if ((r = sys_page_unmap(0, PFTEMP)))
+		panic("[fork] pgfault:sys_page_unmap failed %x for addr: %x", r, PFTEMP);
 }
 
 //
-// Map our virtual page pn (address pn*PGSIZE) into the target envid
+// Map our virtual address va into the target envid
 // at the same virtual address.  If the page is writable or copy-on-write,
 // the new mapping must be created copy-on-write, and then our mapping must be
 // marked copy-on-write as well.  (Exercise: Why do we need to mark ours
@@ -50,13 +55,10 @@ pgfault(struct UTrapframe *utf)
 // It is also OK to panic on error.
 //
 static int
-duppage(envid_t envid, unsigned pn)
+duppage(envid_t envid, uintptr_t va)
 {
 	int r;
-
-	// LAB 4: Your code here.
-	void * va = (void*) (pn*PGSIZE);
-	uint32_t perm = uvpt[pn] & PTE_SYSCALL;
+	uint32_t perm = uvpt[PGNUM(va)] & PTE_SYSCALL;
 	if (perm & PTE_W || perm & PTE_COW) {
 		// Writable
 		// Mark COW in child
@@ -84,67 +86,20 @@ duppage(envid_t envid, unsigned pn)
 // It is also OK to panic on error.
 //
 // Hint:
-//   Use uvpd, uvpt, and duppage.
-//   Remember to fix "thisenv" in the child process.
 //   Neither user exception stack should ever be marked copy-on-write,
 //   so you must allocate a new page for the child's user exception stack.
 //
 envid_t
 fork(void)
 {
-	// LAB 4: Your code here.
-	//return fork_v0();
-	// panic("fork not implemented");
-	int r;
 	set_pgfault_handler(pgfault);
 
-
+	// Allocate a new child environment.
+	// The kernel will initialize it with a copy of our register state,
+	// so that the child will appear to have called sys_exofork() too -
+	// except that in the child, this "fake" call to sys_exofork()
+	// will return 0 instead of the envid of the child.
 	envid_t envid = sys_exofork();
-	if (envid < 0)
-		panic("sys_exofork: %e\n", envid);
-
-	if (envid == 0) {
-		thisenv = &envs[ENVX(sys_getenvid())];
-		return 0;
-	}
-
-	uintptr_t va;
-	for (va = 0; va < USTACKTOP; va += PGSIZE) {
-		
-		
-		if (!(uvpd[PDX(va)] & PTE_P) || !(uvpt[PGNUM(va)] & PTE_P)){
-			continue;
-		}			
-		if (uvpd[PDX(va)] & PTE_U && uvpt[PGNUM(va)] & PTE_U) {	
-			duppage(envid, PGNUM(va));
-		}
-	}
-
-	// Allocate a new user exception stack for the child
-	sys_page_alloc(envid, (void *)(UXSTACKTOP - PGSIZE), PTE_U|PTE_P|PTE_W);
-
-	extern void _pgfault_upcall(void);
-	
-	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)))
-		panic("[fork] sys_env_set_pgfault_upcall: %x", r);
-
-	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
-		panic("sys_env_set_status: %e", r);
-
-	return envid;	
-}
-
-envid_t
-fork_v0(void)
-{
-	int ret;
-
-	uint32_t pdeno, pteno;
-	envid_t envid;
-	uint32_t pgnum;
-	uintptr_t* pgaddr;
-	envid = sys_exofork();
-
 	if (envid < 0)
 		panic("sys_exofork: %e\n", envid);
 
@@ -156,48 +111,53 @@ fork_v0(void)
 		thisenv = &envs[ENVX(sys_getenvid())];
 		return 0;
 	}
-	for (pdeno = 0; pdeno < PDX(UTOP); pdeno++) {
-		if (!(uvpd[pdeno] & PTE_P))
-			continue;
-		// The PTE for page number N is stored in uvpt[N]
-		for (pteno = 0; pteno < NPTENTRIES; pteno++) {
-			pgaddr = PGADDR(pdeno, pteno, 0);
-			pgnum = PGNUM(pgaddr);
-			if (uvpt[pgnum] & PTE_P) {
-				dup_or_share(envid,pgaddr,uvpt[pgnum] & PTE_SYSCALL);
-			}
+
+	// We're the parent.
+	// Copy address space
+	uintptr_t va;
+	for (va = 0; va < USTACKTOP; va += PGSIZE) {
+		// TODO: Could optimize so if the PDE is not present,
+		// skip the whole thing instead of still looping through
+		// all its PTEs.
+		if (uvpd[PDX(va)] & PTE_P &&  // see memlayout.h for uvpd/uvpt explanation
+				uvpd[PDX(va)] & PTE_U &&
+		  	uvpt[PGNUM(va)] & PTE_P &&
+		  	uvpt[PGNUM(va)] & PTE_U) {
+			duppage(envid, va);
 		}
 	}
-	// Also copy the stack we are currently running on.
-	dup_or_share(envid,ROUNDDOWN(&ret, PGSIZE),PTE_P | PTE_U | PTE_W);
+
+	// Allocate a new user exception stack for the child
+	sys_page_alloc(envid, (void *)(UXSTACKTOP - PGSIZE), PTE_U|PTE_P|PTE_W);
+
+	// Assembly language pgfault entrypoint defined in lib/pfentry.S.
+	// Why can't this call to set_pgfault_upcall be executed in the child
+	// code above, before fixing `thisenv`?
+	// If you look at the assembly for lib.h:sys_exofork, you'll notice it
+	// makes the `int` syscall and then immediately modifies a stack
+	// variable.
+	// When handling sys_exofork calls, the kernel allocates a new env
+	// and copies the parent's register state to it (see syscall.c:sys_exofork).
+	// The parent then returns from sys_exofork above and copies its address space
+	// into the child and marks all writeable pages COW.
+	// Thus, when the child finally runs (after the parent returns from `fork`)
+	// it will try to return from sys_exofork (just as the parent did, except with
+	// a 0 return value) and thus try to modify the aforementioned stack variable.
+	// This stack page was just marked COW instead of W, which triggers a
+	// userland page fault, but it hasn't gotten the chance to execute any of the
+	// code after the `sys_exofork` call, and thus it cannot register its own
+	// page fault handler--the parent must do it before the child can return
+	// from `sys_exofork`.
+	extern void _pgfault_upcall(void);
+	int r;
+	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)))
+		panic("[fork] sys_env_set_pgfault_upcall: %x", r);
 
 	// Start the child environment running
-	if ((ret = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
-		panic("sys_env_set_status: %e", ret);
+	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
+		panic("sys_env_set_status: %e", r);
+
 	return envid;
-}
-
-static void
-dup_or_share(envid_t envid, void *addr, int perm)
-{
-	int r;
-
-	if (!(perm & PTE_W)){ // SOLO LECTURA 
-		if ((r = sys_page_map(0, addr, envid, addr, perm))<0) // MAPPEO DEL HIJO AL PADRE (UTILIZO LA MISMA DIRECCION VIRTUAL)
-			panic("duppage: sys_page_map failed for %x: %d\n", addr, r);
-		return;
-	}
-	// LO QUE SIGUE ES PARA 
-	if ((r = sys_page_alloc(envid, addr, perm)) < 0) // RESERVO UNA PAGINA EN EL HIJO CON DIRECCION VIRTUAL addr
-		panic("sys_page_alloc: %e", r);
-
-	 //  // MAPPEO DEL HIJO AL PADRE (EN LA DIRECCION UTMP ??? COMO ES QUE FUNCIONA ESTO?)
-	if ((r = sys_page_map(envid, addr , 0, UTEMP, perm)) < 0)
-		panic("sys_page_map: %e", r);
-
-	memmove(UTEMP, addr , PGSIZE);  
-								
-	if ((r = sys_page_unmap(0, UTEMP)) < 0) panic("sys_page_unmap: %e", r); // NO SE SI ESTA BIEN ESTO!!!!			
 }
 
 // Challenge!
