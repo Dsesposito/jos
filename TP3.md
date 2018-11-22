@@ -228,11 +228,11 @@ multicore_init
 
 **RESPUESTA:**
 
-La linea mencionada copia el codigo de entrada del application processors (AP) ubicado en kern/mpentry.S (.globl mpentry_start) a la dirección de memoria virtual correspondiente a la memoria dirección de memoria física MPENTRY_PADDR
+La linea mencionada copia el codigo de entrada del application processors (AP) ubicado en kern/mpentry.S (.globl mpentry_start) a la dirección de memoria física MPENTRY_PADDR
 
-**PREGUNTA:**  FALTA CONTESTAR LA SEGUNDA PREGUNTA
+**PREGUNTA:**
 
-¿Para qué se usa la variable global mpentry_kstack? ¿Qué ocurriría si el espacio para este stack se reservara en el archivo kern/mpentry.S, de manera similar a bootstack en el archivo kern/entry.S?
+¿Para qué se usa la variable global mpentry_kstack?
 
 **RESPUESTA:**
 
@@ -245,11 +245,21 @@ Al momento de comenzar a correr un AP se ejecutan las siguientes lineas de códi
     lapic_startap(c->cpu_id, PADDR(code));
 ```
 
-Como se puede ver , antes de mandar a correr el AP lo que se hace es apuntar mpentry_kstack a la primera dirección de memoria del kernel stack del cpu que se esta mandando a correr. En mpentry.S se puede ver como mueven dicha direccion de memoria al registro %esp
+Como se puede ver , antes de mandar a correr el AP lo que se hace es apuntar mpentry_kstack a la primera dirección de memoria del kernel stack del cpu que se esta mandando a correr. En mpentry.S se puede ver como mueven dicha direccion de memoria al registro stack pointer del cpu.
 
 ```c
 	movl    mpentry_kstack, %esp 
 ```
+
+Por lo tanto a mpentry_kstack se la utiliza en mpentry.S para cargarle al cpu el stack.
+
+**PREGUNTA:** 
+
+¿Qué ocurriría si el espacio para este stack se reservara en el archivo kern/mpentry.S, de manera similar a bootstack en el archivo kern/entry.S?
+
+**RESPUESTA:**
+
+El código mpentry.S es ejecutado por N-1 CPUs y la memoria en entry.S se genera de manera estática. Si se generará la memoria de la misma manera todos los cpus quedarían apuntando al mismo stack.
 
 **PREGUNTA:** 
 
@@ -303,10 +313,8 @@ Las direcciones apuntadas por mpentry_kstack fueron:
  * 0xf024d000
  * 0xf0255000
  * 0xf025d000
- 
- Notar que la diferencia entre las dos primeras direcciones de memoria , en decimal, da 32768 bytes y si además nos fijamos en memlayout.h vemos que KSTKSIZE define que el kernel stack size es de 8*PGSIZE es decir 8*4*1024 bytes = 32768 bytes con lo cual las direcciones leídas son consistentes.
 
-**PREGUNTA:**  FALTA CONTESTAR 
+**PREGUNTA:** 
 
 En el archivo kern/mpentry.S se puede leer:
 
@@ -316,19 +324,77 @@ En el archivo kern/mpentry.S se puede leer:
     movl $(RELOC(entry_pgdir)), %eax
 ```
 
- * ¿Qué valor tiene el registro %eip cuando se ejecuta esa línea?
-
-Responder con redondeo a 12 bits, justificando desde qué región de memoria se está ejecutando este código.
-
- * ¿Se detiene en algún momento la ejecución si se pone un breakpoint en mpentry_start? ¿Por qué?    
-
+¿Qué valor tiene el registro %eip cuando se ejecuta esa línea? Responder con redondeo a 12 bits, justificando desde qué región de memoria se está ejecutando este código.                
+                                          
 **RESPUESTA:**  
 
-La funcion boot_aps llama a la función lapic_startap pasandole por parámetro la dirección de memoria fisíca del código que debe ejecutar el AP . Luego la función lapic_startap le envia al procesdador la startup IPI para que el procesador arranque y ejecute el código de inicio.  
+Dado que el código se mueve a la posición de memoria MPENTRY_PADDR, la dirección que contrendrá el instruction pointer redondeado a 12 bits será justamente MPENTRY_PADDR . 
 
-**PREGUNTA:** FALTA CONTESTAR 
+
+**PREGUNTA:**
+
+¿Se detiene en algún momento la ejecución si se pone un breakpoint en mpentry_start? ¿Por qué?   
+
+**RESPUESTA:**
+
+No, no se detiene. Esto sucede porque el código se esta ejecutando desde a partir de MPENTRY_PADDR.
+
+**PREGUNTA:**
 
 Con GDB, mostrar el valor exacto de %eip y mpentry_kstack cuando se ejecuta la instrucción anterior en el último AP. 
 
 **RESPUESTA:**
 
+A continuación se muestra la sesion de gdb solicitada
+
+```
+    make gdb 
+    gdb -q -s obj/kern/kernel -ex 'target remote 127.0.0.1:26000' -n -x .gdbinit
+    Reading symbols from obj/kern/kernel...done.
+    Remote debugging using 127.0.0.1:26000
+    0x0000fff0 in ?? ()
+    (gdb) b *0x7000 thread 4
+    Breakpoint 1 at 0x7000
+    (gdb) c
+    Continuing.
+    
+    Thread 2 received signal SIGTRAP, Trace/breakpoint trap.
+    [Switching to Thread 2]
+    warning: A handler for the OS ABI "GNU/Linux" is not built into this configuration
+    of GDB.  Attempting to continue with the default i8086 settings.
+    
+    The target architecture is assumed to be i8086
+    [ 700:   0]    0x7000:	cli    
+    0x00000000 in ?? ()
+    (gdb) disable 1
+    (gdb) si 10
+    The target architecture is assumed to be i386
+    => 0x7020:	mov    $0x10,%ax
+    0x00007020 in ?? ()
+    (gdb) x/10i $eip
+    => 0x7020:	mov    $0x10,%ax
+       0x7024:	mov    %eax,%ds
+       0x7026:	mov    %eax,%es
+       0x7028:	mov    %eax,%ss
+       0x702a:	mov    $0x0,%ax
+       0x702e:	mov    %eax,%fs
+       0x7030:	mov    %eax,%gs
+       0x7032:	mov    $0x11f000,%eax
+       0x7037:	mov    %eax,%cr3
+       0x703a:	mov    %cr4,%eax
+    (gdb) watch $eax == 0x11f000
+    Watchpoint 2: $eax == 0x11f000
+    (gdb) c
+    Continuing.
+    => 0x7037:	mov    %eax,%cr3
+    
+    Thread 2 hit Watchpoint 2: $eax == 0x11f000
+    
+    Old value = 0
+    New value = 1
+    0x00007037 in ?? ()
+    (gdb) p $eip
+    $1 = (void (*)()) 0x7037
+    (gdb) p mpentry_kstack
+    $2 = (void *) 0x0
+```
