@@ -1,0 +1,672 @@
+diff --git a/.clang-files b/.clang-files
+old mode 100644
+new mode 100755
+diff --git a/.clang-format b/.clang-format
+old mode 100644
+new mode 100755
+diff --git a/.dir-locals.el b/.dir-locals.el
+old mode 100644
+new mode 100755
+diff --git a/.gdbinit b/.gdbinit
+old mode 100644
+new mode 100755
+diff --git a/.gitignore b/.gitignore
+old mode 100644
+new mode 100755
+index 3446039..b6d39fa
+--- a/.gitignore
++++ b/.gitignore
+@@ -14,3 +14,6 @@
+ /lab?/
+ /sol?/
+ /myapi.key
++/cmake-build-debug
++/.idea
++CMakeLists.txt
+diff --git a/CODING b/CODING
+old mode 100644
+new mode 100755
+diff --git a/GNUmakefile b/GNUmakefile
+old mode 100644
+new mode 100755
+diff --git a/TP0.md b/TP0.md
+old mode 100644
+new mode 100755
+diff --git a/TP1.md b/TP1.md
+old mode 100644
+new mode 100755
+index 4b64f1f..e7eadd1
+--- a/TP1.md
++++ b/TP1.md
+@@ -4,17 +4,98 @@ TP1: Memoria virtual en JOS
+ page2pa
+ -------
+ 
++La función page2pa devuelve  la dirección física de comienzo de una página en dado un PageInfoStruct. El shift que se ejecuta (<<PGSHIFT) es debido a que el tamaño de cada página es de 4KB.
++La deducción de la dirección se realiza calculando la posición que ocupa la página de interés en la lista pages y dicha diferencia se multiplica por 4KB.
++
+ ...
+ 
+ 
+ boot_alloc_pos
+ --------------
+ 
++ * Cálculo manual de la primera dirección de memoria que devolverá boot_alloc() tras el arranque. Se puede calcular a partir del binario compilado (obj/kern/kernel), usando los comandos readelf y/o nm y operaciones matemáticas:
++ 
++Al leer el section header con readelf del árchivo kernel obtenemos :
++
++```
++
++Section Headers:
++  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
++  [ 0]                   NULL            00000000 000000 000000 00      0   0  0
++  [ 1] .text             PROGBITS        f0100000 001000 001ee1 00  AX  0   0 16
++  [ 2] .rodata           PROGBITS        f0101f00 002f00 00095c 00   A  0   0 32
++  [ 3] .stab             PROGBITS        f010285c 00385c 004891 0c   A  4   0  4
++  [ 4] .stabstr          STRTAB          f01070ed 0080ed 001e50 00   A  0   0  1
++  [ 5] .data             PROGBITS        f0109000 00a000 00a300 00  WA  0   0 4096
++  [ 6] .bss              NOBITS          f0113300 014300 000650 00  WA  0   0 32
++  [ 7] .comment          PROGBITS        00000000 014300 000035 01  MS  0   0  1
++  [ 8] .shstrtab         STRTAB          00000000 0150a8 00004c 00      0   0  1
++  [ 9] .symtab           SYMTAB          00000000 014338 0008c0 10     10  70  4
++  [10] .strtab           STRTAB          00000000 014bf8 0004b0 00      0   0  1
++```
++
++Se puede observar que el segmento bss empieza en la dirección 0xf0113300 y tiene un tamaño 000650 . Esto nos dice que el segmento termina en 0xf0113950 . Con lo cual , la primer dirección de memoria libre será el multiplo de 4096 mas cercano a 0xf0113950 . El cual resulta ser : 0xf0114000 
++
++La primera vez que se llama boot_alloc , se la llama para reservar la memoria para el page directory . Entonces la página que contendrá el page directory será la correspondiente a la dirección 0xf0114000 . Como boot_alloc devuelve la siguiente página libre, la dirección que devolverá será la correspondiente al siguiente multiplo de 4096 lo cual corresponde a la dirección 0xf0115000 . 
++
++
++ * Mostrar una sesión de GDB en la que, poniendo un breakpoint en la función boot_alloc(), se muestre el valor de end y nextfree al comienzo y fin de esa primera llamada a boot_alloc().
++
++```
++make gdb
++gdb -q -s obj/kern/kernel -ex 'target remote 127.0.0.1:26000' -n -x .gdbinit
++Reading symbols from obj/kern/kernel...done.
++Remote debugging using 127.0.0.1:26000
++0x0000fff0 in ?? ()
++(gdb) b boot_alloc 
++Breakpoint 1 at 0xf0100a32: file kern/pmap.c, line 98.
++(gdb) c
++Continuing.
++The target architecture is assumed to be i386
++=> 0xf0100a32 <boot_alloc>:	cmpl   $0x0,0xf0113538
++
++Breakpoint 1, boot_alloc (n=4096) at kern/pmap.c:98
++98		if (!nextfree) {
++(gdb) n
++=> 0xf0100a3b <boot_alloc+9>:	mov    $0xf011494f,%edx
++100			nextfree = ROUNDUP((char *) end, PGSIZE);
++(gdb) n
++=> 0xf0100a4c <boot_alloc+26>:	cmp    %eax,0xf0113944
++109		if(npages<n){
++(gdb) p/x end
++$1 = 0x21
++(gdb) p/x nextfree 
++$2 = 0xf0114000
++(gdb) n
++=> 0xf0100a6b <boot_alloc+57>:	mov    0xf0113538,%edx
++117		return nextfree;
++(gdb) n
++=> 0xf0100a71 <boot_alloc+63>:	test   %eax,%eax
++112		if (n != 0) {
++(gdb) n
++=> 0xf0100a75 <boot_alloc+67>:	lea    0xfff(%edx,%eax,1),%eax
++114			nextfree = ROUNDUP((char *) (nextfree+n), PGSIZE);
++(gdb) n
++=> 0xf0100a86 <boot_alloc+84>:	mov    %edx,%eax
++118	}
++(gdb) p/x nextfree 
++$3 = 0xf0115000
++(gdb) n
++=> 0xf0100e70 <mem_init+27>:	sub    $0x4,%esp
++mem_init () at kern/pmap.c:144
++144		memset(kern_pgdir, 0, PGSIZE);
++
++```
++
+ ...
+ 
+ 
+ page_alloc
+ ----------
++¿en qué se diferencia page2pa() de page2kva()?
++
++page2pa devuelve la dirección física a la que mapea la página. 
++page2kva devuelve la dirección virtual del kernel a la que mapea la página. 
+ 
+ ...
+ 
+diff --git a/__pycache__/gradelib.cpython-36.pyc b/__pycache__/gradelib.cpython-36.pyc
+new file mode 100644
+index 0000000..8963b2e
+Binary files /dev/null and b/__pycache__/gradelib.cpython-36.pyc differ
+diff --git a/boot/Makefrag b/boot/Makefrag
+old mode 100644
+new mode 100755
+diff --git a/boot/boot.S b/boot/boot.S
+old mode 100644
+new mode 100755
+diff --git a/boot/main.c b/boot/main.c
+old mode 100644
+new mode 100755
+diff --git a/boot/sign.pl b/boot/sign.pl
+old mode 100644
+new mode 100755
+diff --git a/conf/env.mk b/conf/env.mk
+old mode 100644
+new mode 100755
+diff --git a/conf/lab.mk b/conf/lab.mk
+old mode 100644
+new mode 100755
+diff --git a/fs/test.c b/fs/test.c
+old mode 100644
+new mode 100755
+diff --git a/fs/testshell.key b/fs/testshell.key
+old mode 100644
+new mode 100755
+diff --git a/gradelib.py b/gradelib.py
+old mode 100644
+new mode 100755
+diff --git a/inc/COPYRIGHT b/inc/COPYRIGHT
+old mode 100644
+new mode 100755
+diff --git a/inc/assert.h b/inc/assert.h
+old mode 100644
+new mode 100755
+diff --git a/inc/elf.h b/inc/elf.h
+old mode 100644
+new mode 100755
+diff --git a/inc/error.h b/inc/error.h
+old mode 100644
+new mode 100755
+diff --git a/inc/kbdreg.h b/inc/kbdreg.h
+old mode 100644
+new mode 100755
+diff --git a/inc/memlayout.h b/inc/memlayout.h
+old mode 100644
+new mode 100755
+index a537b15..4119557
+--- a/inc/memlayout.h
++++ b/inc/memlayout.h
+@@ -82,7 +82,6 @@
+  *     there if desired.  JOS user programs map pages temporarily at UTEMP.
+  */
+ 
+-
+ // All physical memory mapped at this address
+ #define	KERNBASE	0xF0000000
+ 
+diff --git a/inc/mmu.h b/inc/mmu.h
+old mode 100644
+new mode 100755
+diff --git a/inc/stab.h b/inc/stab.h
+old mode 100644
+new mode 100755
+diff --git a/inc/stdarg.h b/inc/stdarg.h
+old mode 100644
+new mode 100755
+diff --git a/inc/stdio.h b/inc/stdio.h
+old mode 100644
+new mode 100755
+diff --git a/inc/string.h b/inc/string.h
+old mode 100644
+new mode 100755
+diff --git a/inc/types.h b/inc/types.h
+old mode 100644
+new mode 100755
+diff --git a/inc/x86.h b/inc/x86.h
+old mode 100644
+new mode 100755
+diff --git a/kern/COPYRIGHT b/kern/COPYRIGHT
+old mode 100644
+new mode 100755
+diff --git a/kern/Makefrag b/kern/Makefrag
+old mode 100644
+new mode 100755
+diff --git a/kern/console.c b/kern/console.c
+old mode 100644
+new mode 100755
+diff --git a/kern/console.h b/kern/console.h
+old mode 100644
+new mode 100755
+diff --git a/kern/entry.S b/kern/entry.S
+old mode 100644
+new mode 100755
+index 6c58826..b7c4729
+--- a/kern/entry.S
++++ b/kern/entry.S
+@@ -57,9 +57,13 @@ entry:
+ 	# is defined in entrypgdir.c.
+ 	movl	$(RELOC(entry_pgdir)), %eax
+ 	movl	%eax, %cr3
++    # Turn on large pages
++    movl	%cr4, %eax
++    orl     $(CR4_PSE), %eax
++    movl    %eax, %cr4
+ 	# Turn on paging.
+ 	movl	%cr0, %eax
+-	orl	$(CR0_PE|CR0_PG|CR0_WP), %eax
++	orl	    $(CR0_PE|CR0_PG|CR0_WP), %eax
+ 	movl	%eax, %cr0
+ 
+ 	# Now paging is enabled, but we're still running at a low EIP
+diff --git a/kern/entrypgdir.c b/kern/entrypgdir.c
+old mode 100644
+new mode 100755
+index 4f324d1..81cc020
+--- a/kern/entrypgdir.c
++++ b/kern/entrypgdir.c
+@@ -17,6 +17,7 @@ pte_t entry_pgtable[NPTENTRIES];
+ // related to linking and static initializers, we use "x + PTE_P"
+ // here, rather than the more standard "x | PTE_P".  Everywhere else
+ // you should use "|" to combine flags.
++/*
+ __attribute__((__aligned__(PGSIZE)))
+ pde_t entry_pgdir[NPDENTRIES] = {
+ 	// Map VA's [0, 4MB) to PA's [0, 4MB)
+@@ -26,9 +27,19 @@ pde_t entry_pgdir[NPDENTRIES] = {
+ 	[KERNBASE>>PDXSHIFT]
+ 		= ((uintptr_t)entry_pgtable - KERNBASE) + PTE_P + PTE_W
+ };
++*/
++__attribute__((__aligned__(PGSIZE)))
++pde_t entry_pgdir[NPDENTRIES] = {
++    // Map VA's [0, 4MB) to PA's [0, 4MB)
++    [0] = 0x000000 | PTE_P | PTE_W | PTE_PS,
++    // Map VA's [KERNBASE, KERNBASE+4MB) to PA's [0, 4MB)
++    [KERNBASE>>PDXSHIFT] = 0x000000 | PTE_P | PTE_W | PTE_PS
++};
+ 
+ // Entry 0 of the page table maps to physical page 0, entry 1 to
+ // physical page 1, etc.
++// Entry_pgtable no longer needed. Large page is being used instead
++//#if 0
+ __attribute__((__aligned__(PGSIZE)))
+ pte_t entry_pgtable[NPTENTRIES] = {
+ 	0x000000 | PTE_P | PTE_W,
+@@ -1056,4 +1067,4 @@ pte_t entry_pgtable[NPTENTRIES] = {
+ 	0x3fe000 | PTE_P | PTE_W,
+ 	0x3ff000 | PTE_P | PTE_W,
+ };
+-
++//#endif
+diff --git a/kern/init.c b/kern/init.c
+old mode 100644
+new mode 100755
+diff --git a/kern/kclock.c b/kern/kclock.c
+old mode 100644
+new mode 100755
+diff --git a/kern/kclock.h b/kern/kclock.h
+old mode 100644
+new mode 100755
+diff --git a/kern/kdebug.c b/kern/kdebug.c
+old mode 100644
+new mode 100755
+diff --git a/kern/kdebug.h b/kern/kdebug.h
+old mode 100644
+new mode 100755
+diff --git a/kern/kernel.ld b/kern/kernel.ld
+old mode 100644
+new mode 100755
+diff --git a/kern/monitor.c b/kern/monitor.c
+old mode 100644
+new mode 100755
+diff --git a/kern/monitor.h b/kern/monitor.h
+old mode 100644
+new mode 100755
+diff --git a/kern/pmap.c b/kern/pmap.c
+old mode 100644
+new mode 100755
+index 88608e7..4f16b55
+--- a/kern/pmap.c
++++ b/kern/pmap.c
+@@ -105,8 +105,16 @@ boot_alloc(uint32_t n)
+ 	// to a multiple of PGSIZE.
+ 	//
+ 	// LAB 2: Your code here.
+-
+-	return NULL;
++	
++	if((npages*PGSIZE) < n){
++		panic("boot_alloc: not enougth memory to allocate\n");
++	}
++	if (n != 0) {
++		char *next = nextfree;
++		nextfree = ROUNDUP((char *) (nextfree+n), PGSIZE);
++		return next;
++	} 
++	return nextfree;
+ }
+ 
+ // Set up a two-level page table:
+@@ -127,9 +135,6 @@ mem_init(void)
+ 	// Find out how much memory the machine has (npages & npages_basemem).
+ 	i386_detect_memory();
+ 
+-	// Remove this line when you're ready to test this function.
+-	panic("mem_init: This function is not finished\n");
+-
+ 	//////////////////////////////////////////////////////////////////////
+ 	// create initial page directory.
+ 	kern_pgdir = (pde_t *) boot_alloc(PGSIZE);
+@@ -154,21 +159,34 @@ mem_init(void)
+ 	// to initialize all fields of each struct PageInfo to 0.
+ 	// Your code goes here:
+ 
+-
++	pages = (struct PageInfo *)boot_alloc(npages * sizeof(struct PageInfo));
++	memset(pages, 0x00, npages * sizeof(struct PageInfo));
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Now that we've allocated the initial kernel data structures, we set
+ 	// up the list of free physical pages. Once we've done so, all further
+ 	// memory management will go through the page_* functions. In
+ 	// particular, we can now map memory using boot_map_region
+ 	// or page_insert
++    cprintf("Starting page init \n");
+ 	page_init();
+ 
+ 	check_page_free_list(1);
+-	check_page_alloc();
++    cprintf("Free page list checked. Continuing to page alloc check \n");
++
++    check_page_alloc();
++    cprintf("Page alloc checked. Continuing to page check \n");
++
+ 	check_page();
++    cprintf("Page checked. Continuing to set up virtual memory \n");
+ 
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Now we set up virtual memory
++	
++	// We add the 3 calls to boot_map_region () to configure the 3 regions:
++	// ** The stack of the kernel in KSTACKTOP.
++	// ** The arrangement pages in UPAGES.
++	// ** The first 256 MiB of physical memory in KERNBASE.
++
+ 
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Map 'pages' read-only by the user at linear address UPAGES
+@@ -178,6 +196,8 @@ mem_init(void)
+ 	//    - pages itself -- kernel RW, user NONE
+ 	// Your code goes here:
+ 
++	boot_map_region(kern_pgdir, UPAGES, PTSIZE, PADDR(pages), PTE_U);
++
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Use the physical memory that 'bootstack' refers to as the kernel
+ 	// stack.  The kernel stack grows down from virtual address KSTACKTOP.
+@@ -190,6 +210,8 @@ mem_init(void)
+ 	//     Permissions: kernel RW, user NONE
+ 	// Your code goes here:
+ 
++	boot_map_region(kern_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
++
+ 	//////////////////////////////////////////////////////////////////////
+ 	// Map all of physical memory at KERNBASE.
+ 	// Ie.  the VA range [KERNBASE, 2^32) should map to
+@@ -199,6 +221,8 @@ mem_init(void)
+ 	// Permissions: kernel RW, user NONE
+ 	// Your code goes here:
+ 
++	boot_map_region(kern_pgdir, KERNBASE, -KERNBASE, 0, PTE_W);
++
+ 	// Check that the initial page directory has been set up correctly.
+ 	check_kern_pgdir();
+ 
+@@ -256,12 +280,34 @@ page_init(void)
+ 	// Change the code to reflect this.
+ 	// NB: DO NOT actually touch the physical memory corresponding to
+ 	// free pages!
+-	size_t i;
+-	for (i = 0; i < npages; i++) {
+-		pages[i].pp_ref = 0;
+-		pages[i].pp_link = page_free_list;
+-		page_free_list = &pages[i];
+-	}
++
++    size_t j;
++    physaddr_t firstFreePhysicsAddr = PADDR(boot_alloc(0));
++    physaddr_t kernBasePhysicsAddr = EXTPHYSMEM;
++    for(j = 0 ; j < npages ; j++){
++
++        physaddr_t currAddr = PGSIZE*j;
++
++        //Page 0 is in use
++        if (j == 0) {
++            continue;
++        }
++
++        //Io segment in use.
++        if(currAddr >= IOPHYSMEM && currAddr < EXTPHYSMEM){
++            continue;
++        }
++
++        //Kernel code
++        if(currAddr >= kernBasePhysicsAddr && currAddr < firstFreePhysicsAddr){
++            continue;
++        }
++
++
++        pages[j].pp_ref = 0;
++        pages[j].pp_link = page_free_list;
++        page_free_list = &pages[j];
++    }
+ }
+ 
+ //
+@@ -280,7 +326,25 @@ struct PageInfo *
+ page_alloc(int alloc_flags)
+ {
+ 	// Fill this function in
+-	return 0;
++	// if we don't have free memory, then we return NULL.
++	if (!page_free_list)
++		return NULL;
++	
++	struct PageInfo *page_list = page_free_list;
++
++	// Remove from page_free_list.
++	page_free_list = page_list->pp_link;
++
++	page_list->pp_link = NULL;
++
++	// Fill with zeros.
++	if (alloc_flags & ALLOC_ZERO) {
++		// get the kernel virtual address that maps page_list
++		char *kva = page2kva(page_list);
++		// Fill block of memory with '\0' bytes
++		memset(kva, '\0', PGSIZE);
++	}
++	return page_list;
+ }
+ 
+ //
+@@ -293,6 +357,11 @@ page_free(struct PageInfo *pp)
+ 	// Fill this function in
+ 	// Hint: You may want to panic if pp->pp_ref is nonzero or
+ 	// pp->pp_link is not NULL.
++	if(pp->pp_ref != 0 || pp->pp_link != NULL){
++		panic("'pp->pp_ref' is nonzero or 'pp->pp_link' != NULL");
++	}
++	pp->pp_link = page_free_list;
++	page_free_list = pp;
+ }
+ 
+ //
+@@ -327,12 +396,50 @@ page_decref(struct PageInfo *pp)
+ //
+ // Hint 3: look at inc/mmu.h for useful macros that mainipulate page
+ // table and page directory entries.
++// table and page directory entries.
+ //
+ pte_t *
+ pgdir_walk(pde_t *pgdir, const void *va, int create)
+ {
+-	// Fill this function in
+-	return NULL;
++	
++	struct PageInfo *page;
++
++	pte_t * page_table;
++
++	assert(pgdir);
++
++	uintptr_t page_directory_index = PDX(va);
++
++	pde_t page_directory_entry = pgdir[page_directory_index];
++
++	/* table is present  ? */
++	if(page_directory_entry & PTE_P){
++		page_table = KADDR(PTE_ADDR(page_directory_entry));
++	}else{ /* create */
++		if(!create){
++			return NULL;
++		}
++		page =  page_alloc(ALLOC_ZERO);
++		
++		if(!page){
++			return NULL;
++		}
++
++		/*
++		the x86 MMU checks permission bits in both the page directory
++		and the page table
++		New Page flags : Page user , Page Writable, Page Present 
++		*/
++		pgdir[page_directory_index] = page2pa(page) | PTE_U | PTE_W | PTE_P;
++		// the new page's reference count is incremented :
++		page->pp_ref++;
++		// turn a PageInfo * into the physical address
++		page_table = (pte_t *)page2kva(page);
++	}
++	
++	uintptr_t page_table_index = PTX(va);
++	
++	return &page_table[PTX(va)];
+ }
+ 
+ //
+@@ -349,9 +456,18 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
+ static void
+ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
+ {
+-	// Fill this function in
++	// Size is a multiple of PGSIZE, and va and pa are both page-aligned.
++	// The loop increment by PGSIZE both address (pa and va).
++	 
++	int q;
++	for (q = 0; q < size/PGSIZE; ++q, va += PGSIZE, pa += PGSIZE) {
++		//we use the hint: "the TA solution uses pgdir_walk"
++		pte_t *pte = pgdir_walk(pgdir, (void *) va, 1);	
++		if (!pte) panic("boot_map_region: out of memory!!");
++		// permission bits perm|PTE_P for the entries.
++		*pte = pa | perm | PTE_P;
++	}
+ }
+-
+ //
+ // Map the physical page 'pp' at virtual address 'va'.
+ // The permissions (the low 12 bits) of the page table entry
+@@ -380,7 +496,28 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
+ int
+ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
+ {
+-	// Fill this function in
++
++    // Get page table from v.a
++    pte_t * vaPte = pgdir_walk(pgdir,va,1);
++
++    if(!vaPte){
++		return -E_NO_MEM;
++    }
++
++    physaddr_t pa = page2pa(pp);
++
++    //If pte is not present, the page must be removed.
++    if(*vaPte & PTE_P && PTE_ADDR(*vaPte) != pa){
++        page_remove(pgdir,va);
++    }
++
++    //If the physical address is the same, just change permissions.
++    if(PTE_ADDR(*vaPte) != pa){
++        pp->pp_ref++;
++    }
++
++    *vaPte = pa | perm | PTE_P;
++
+ 	return 0;
+ }
+ 
+@@ -398,8 +535,23 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
+ struct PageInfo *
+ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
+ {
+-	// Fill this function in
+-	return NULL;
++	assert(pgdir);
++
++	// Hint: the TA solution uses pgdir_walk
++	pte_t *page_table_entry = pgdir_walk(pgdir, va, 0);
++
++	// "Return NULL if there is no page mapped at va"
++	if (!page_table_entry || !(*page_table_entry & PTE_P))
++		return NULL;
++	// If pte_store is not zero, then we store in it the address
++	// of the pte for this page
++	if(pte_store)
++		*pte_store = page_table_entry; 
++
++	// Address in page table
++	physaddr_t pa = PTE_ADDR(*page_table_entry);
++	
++	return pa2page(pa);
+ }
+ 
+ //
+@@ -420,7 +572,23 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
+ void
+ page_remove(pde_t *pgdir, void *va)
+ {
+-	// Fill this function in
++    pte_t* pte = 0;
++    //Get physical page reference and pte
++	struct PageInfo* pp = page_lookup(pgdir,va,&pte);
++
++	//If pte don't exists do nothing
++	if(!pte || !(*pte & PTE_P)){
++        return;
++	}
++
++	//Pp ref decrement
++    page_decref(pp);
++
++	//Clear pte
++	*pte = 0;
++
++	//Invalidate cache
++    tlb_invalidate(pgdir,va);
+ }
+ 
+ //
+diff --git a/kern/pmap.h b/kern/pmap.h
+old mode 100644
+new mode 100755
+diff --git a/kern/printf.c b/kern/printf.c
+old mode 100644
+new mode 100755
+diff --git a/lib/printfmt.c b/lib/printfmt.c
+old mode 100644
+new mode 100755
+diff --git a/lib/readline.c b/lib/readline.c
+old mode 100644
+new mode 100755
+diff --git a/lib/string.c b/lib/string.c
+old mode 100644
+new mode 100755
+diff --git a/mergedep.pl b/mergedep.pl
+old mode 100644
+new mode 100755
+diff --git a/user/sendpage.c b/user/sendpage.c
+old mode 100644
+new mode 100755

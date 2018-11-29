@@ -42,15 +42,31 @@
 	pushl $(num);							\
 	jmp _alltraps
 
-.text
-
 /*
  * Lab 3: Your code here for generating entry points for the different traps.
  */
 
-
+.text
+TRAPHANDLER_NOEC(trap_divzero, T_DIVIDE);
+TRAPHANDLER_NOEC(trap_breakpoint, T_BRKPT);
+TRAPHANDLER(trap_generalfault, T_GPFLT);
+TRAPHANDLER(trap_pagefault, T_PGFLT);
+TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
+TRAPHANDLER_NOEC(trap_irq, IRQ_OFFSET + IRQ_TIMER);
 
 /*
  * Lab 3: Your code here for _alltraps
  */
+.global _alltraps
+_alltraps:
+	
+	pushl %ds
+	pushl %es
+	pushal
 
+	movl $GD_KD, %eax
+	movw %ax, %ds
+	movw %ax, %es
+
+	pushl %esp
+	call trap
