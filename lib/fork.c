@@ -66,7 +66,13 @@ duppage(envid_t envid, unsigned pn)
 	// LAB 4: Your code here.
 	void *va = (void *) (pn * PGSIZE);
 	uint32_t perm = uvpt[pn] & PTE_SYSCALL;
-	if (perm & PTE_W || perm & PTE_COW) {
+	if (perm & PTE_SHARE){
+		r = sys_page_map(0, (void *) va, envid, (void *) va, perm);
+		if(r < 0){
+			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
+		}
+	}
+	else if (perm & PTE_W || perm & PTE_COW) {
 		// Writable
 		// Mark COW in child
 		if ((r = sys_page_map(0,
