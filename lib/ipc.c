@@ -68,7 +68,7 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 	}
 	// It should panic() on any error other than -E_IPC_NOT_RECV.
 	if (return_value) {
-		panic("return value of ipc_send is: %e", return_value);
+		panic("return value  of ipc_send is: %e", return_value);
 	}
 }
 
