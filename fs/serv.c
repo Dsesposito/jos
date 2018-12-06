@@ -216,12 +216,26 @@ serve_read(envid_t envid, union Fsipc *ipc)
 	struct Fsret_read *ret = &ipc->readRet;
 
 	if (debug)
-		cprintf("serve_read %08x %08x %08x\n",
-		        envid,
-		        req->req_fileid,
-		        req->req_n);
+		cprintf("serve_read %08x %08x %08x\n", envid, req->req_fileid, req->req_n);
 
 	// Lab 5: Your code here:
+	// serve_read needs to use the function 'openfile_lookup' to find the file. 
+	// and then read the file by the function 'file_read'. 
+	// Finally, the fd_offset is incremented as it matches.
+	int i;
+	struct OpenFile * open_file;
+	// openfile_lookup transforms a "file id" into an Openfile struct
+	if ((i = openfile_lookup(envid, req->req_fileid, &open_file)) < 0)
+		// We return < 0 on error.
+		return i;
+	if ((i = file_read(open_file->o_file, ret->ret_buf, req->req_n, open_file->o_fd->fd_offset))){
+		if (i > 0){
+			// increase fd_offset
+			open_file->o_fd->fd_offset += i;
+		}
+		// We returns the number of bytes succesfully read.
+		return i;
+	}
 	return 0;
 }
 
@@ -240,7 +254,26 @@ serve_write(envid_t envid, struct Fsreq_write *req)
 		        req->req_n);
 
 	// LAB 5: Your code here.
-	panic("serve_write not implemented");
+	// serve_write needs to use the function 'openfile_lookup' to find the file. 
+	// and then write the file by the function 'file_write'. 
+	// Finally, the fd_offset is incremented as it matches.
+	int i;
+	struct OpenFile * open_file;
+	// openfile_lookup transforms a "file id" into an Openfile struct
+	if ((i = openfile_lookup(envid, req->req_fileid, &open_file)) < 0)
+		// we return < 0 on error. 
+		return i;
+	if(req->req_n > PGSIZE)
+		req->req_n = PGSIZE;
+	if ((i = file_write(open_file->o_file, req->req_buf, req->req_n, open_file->o_fd->fd_offset))){
+		if (i > 0){
+			open_file->o_fd->fd_offset += i;
+		}
+		// we return the number of bytes written.
+		return i;
+	}
+	return 0;
+
 }
 
 // Stat ipc->stat.req_fileid.  Return the file's struct Stat to the
