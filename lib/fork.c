@@ -200,7 +200,7 @@ dup_or_share(envid_t envid, void *addr, int perm)
 	if (!(perm & PTE_W)) {  // SOLO LECTURA
 		if ((r = sys_page_map(0, addr, envid, addr, perm)) <
 		    0)  // MAPPEO DEL HIJO AL PADRE (UTILIZO LA MISMA DIRECCION
-		        // VIRTUAL)
+			// VIRTUAL)
 			panic("duppage: sys_page_map failed for %x: %d\n", addr, r);
 		return;
 	}
