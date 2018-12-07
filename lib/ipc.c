@@ -57,7 +57,7 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 {
 	// LAB 4: Your code here.
 	if (!pg)
-        pg = (void *)UTOP;
+		pg = (void *) UTOP;
 	int return_value;
 	// We use a while cycle who call sys_ipc_try_send until the message has
 	// been delivered.

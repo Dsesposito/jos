@@ -138,16 +138,16 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	// LAB 5: Your code here.
 	// Remember to check whether the user has supplied us with a good
 	// address!
-	user_mem_assert(curenv,tf, sizeof(struct Trapframe),PTE_U | PTE_P);
+	user_mem_assert(curenv, tf, sizeof(struct Trapframe), PTE_U | PTE_P);
 
-    struct Env *env;
+	struct Env *env;
 
-    int result = envid2env(envid, &env, 1);
-    if(result < 0){
-        return result;
-    }
+	int result = envid2env(envid, &env, 1);
+	if (result < 0) {
+		return result;
+	}
 
-    env->env_tf = *tf;
+	env->env_tf = *tf;
 	env->env_tf.tf_cs |= 3;
 	env->env_tf.tf_es |= 3;
 	env->env_tf.tf_ds |= 3;
@@ -508,8 +508,9 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 		        (envid_t) a1, (uint32_t) a2, (void *) a3, (unsigned) a4);
 	case SYS_ipc_recv:
 		return (int32_t) sys_ipc_recv((void *) a1);
-    case SYS_env_set_trapframe:
-        return sys_env_set_trapframe((envid_t) a1,(struct Trapframe*)a2);
+	case SYS_env_set_trapframe:
+		return sys_env_set_trapframe((envid_t) a1,
+		                             (struct Trapframe *) a2);
 	default:
 		return -E_INVAL;
 	}

@@ -56,7 +56,7 @@ again:
 
 			// LAB 5: Your code here.
 			// similar to > redirection"...
-			if ((fd = open(t, O_RDONLY)) < 0){
+			if ((fd = open(t, O_RDONLY)) < 0) {
 				cprintf("open %s for read: %e", t, fd);
 				exit();
 			}

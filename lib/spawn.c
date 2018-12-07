@@ -326,27 +326,30 @@ copy_shared_pages(envid_t child)
 	uintptr_t va;
 	int r;
 	for (va = 0; va < UTOP; va += PGSIZE) {
-
 		uint32_t pd_perm = uvpd[PDX(va)];
 
-		if(!(pd_perm & PTE_P)){
-            continue;
+		if (!(pd_perm & PTE_P)) {
+			continue;
 		}
 
 		uint32_t perm = uvpt[PGNUM(va)];
 
-		if(!(perm & PTE_P)){
-            continue;
+		if (!(perm & PTE_P)) {
+			continue;
 		}
 
 		if (!(perm & PTE_SHARE)) {
 			continue;
 		}
 
-        r = sys_page_map(0, (void *) va, child, (void *) va, perm & PTE_SYSCALL);
-        if(r < 0){
-            panic("copy_shared_pages: sys_page_map failed for %x: %d\n", va, r);
-        }
+		r = sys_page_map(
+		        0, (void *) va, child, (void *) va, perm & PTE_SYSCALL);
+		if (r < 0) {
+			panic("copy_shared_pages: sys_page_map failed for %x: "
+			      "%d\n",
+			      va,
+			      r);
+		}
 	}
 
 	return 0;

@@ -311,8 +311,7 @@ region_alloc(struct Env *e, void *va, size_t len)
 	uintptr_t addr_end = ROUNDUP((uintptr_t) va + len, PGSIZE);
 	while (addr_start < addr_end) {
 		struct PageInfo *page = page_alloc(0);
-		if (page ==
-		    NULL) { /* panic attack !!! : not enought memory !! */
+		if (page == NULL) { /* panic attack !!! : not enought memory !! */
 			panic("region_alloc: not enough memory for page_alloc");
 		}
 		page_insert(e->env_pgdir,
@@ -464,7 +463,7 @@ env_create(uint8_t *binary, enum EnvType type)
 	// If this is the file server (type == ENV_TYPE_FS) give it I/O
 	// privileges.
 	// LAB 5: Your code here.
-	if(type == ENV_TYPE_FS){
+	if (type == ENV_TYPE_FS) {
 		newEnv->env_tf.tf_eflags |= FL_IOPL_3;
 	}
 }

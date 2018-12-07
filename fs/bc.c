@@ -50,18 +50,22 @@ bc_pgfault(struct UTrapframe *utf)
 	// the disk.
 	//
 	// LAB 5: you code here:
-	addr = ROUNDDOWN(addr,PGSIZE);
+	addr = ROUNDDOWN(addr, PGSIZE);
 
 	envid_t fs_env_id = ipc_find_env(ENV_TYPE_FS);
 
-	int result = sys_page_alloc(fs_env_id,addr,PTE_U | PTE_W | PTE_P);
-	if(result < 0){
-        panic("[bc_pgfault] Error allocating disk block: %e. Error: %e", blockno, result);
+	int result = sys_page_alloc(fs_env_id, addr, PTE_U | PTE_W | PTE_P);
+	if (result < 0) {
+		panic("[bc_pgfault] Error allocating disk block: %e. Error: %e",
+		      blockno,
+		      result);
 	}
 
-	result = ide_read(blockno*BLKSECTS,addr,BLKSECTS);
-	if(result < 0){
-        panic("[bc_pgfault] Error reading disk block: %e. Error: %e", blockno, result);
+	result = ide_read(blockno * BLKSECTS, addr, BLKSECTS);
+	if (result < 0) {
+		panic("[bc_pgfault] Error reading disk block: %e. Error: %e",
+		      blockno,
+		      result);
 	}
 
 	// Clear the dirty bit for the disk block page since we just read the
@@ -93,19 +97,22 @@ flush_block(void *addr)
 		panic("flush_block of bad va %08x", addr);
 
 	// LAB 5: Your code here.
-	addr = ROUNDDOWN(addr,PGSIZE);
+	addr = ROUNDDOWN(addr, PGSIZE);
 
-	if(!va_is_mapped(addr) || !va_is_dirty(addr)){
+	if (!va_is_mapped(addr) || !va_is_dirty(addr)) {
 		return;
 	}
 
-    int result = ide_write(blockno*BLKSECTS,addr,BLKSECTS);
-	if(result < 0){
-		panic("[flush_block] Error writing to disk block: %e . Error %e", blockno, result);
+	int result = ide_write(blockno * BLKSECTS, addr, BLKSECTS);
+	if (result < 0) {
+		panic("[flush_block] Error writing to disk block: %e . Error "
+		      "%e",
+		      blockno,
+		      result);
 	}
 
 	result = sys_page_map(0, addr, 0, addr, uvpt[PGNUM(addr)] & PTE_SYSCALL);
-	if (result < 0){
+	if (result < 0) {
 		panic("[flush_block] Error calling sys_page_map: %e", result);
 	}
 }

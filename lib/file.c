@@ -151,7 +151,6 @@ devfile_write(struct Fd *fd, const void *buf, size_t n)
 	memmove(fsipcbuf.write.req_buf, buf, n);
 
 	return fsipc(FSREQ_WRITE, NULL);
-
 }
 
 static int
