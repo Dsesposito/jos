@@ -1,0 +1,410 @@
+diff --git a/__pycache__/gradelib.cpython-36.pyc b/__pycache__/gradelib.cpython-36.pyc
+index 5e45bcc..2e32b59 100644
+Binary files a/__pycache__/gradelib.cpython-36.pyc and b/__pycache__/gradelib.cpython-36.pyc differ
+diff --git a/fs/bc.c b/fs/bc.c
+index ec59cfb..8a5422b 100644
+--- a/fs/bc.c
++++ b/fs/bc.c
+@@ -50,6 +50,23 @@ bc_pgfault(struct UTrapframe *utf)
+ 	// the disk.
+ 	//
+ 	// LAB 5: you code here:
++	addr = ROUNDDOWN(addr, PGSIZE);
++
++	envid_t fs_env_id = ipc_find_env(ENV_TYPE_FS);
++
++	int result = sys_page_alloc(fs_env_id, addr, PTE_U | PTE_W | PTE_P);
++	if (result < 0) {
++		panic("[bc_pgfault] Error allocating disk block: %e. Error: %e",
++		      blockno,
++		      result);
++	}
++
++	result = ide_read(blockno * BLKSECTS, addr, BLKSECTS);
++	if (result < 0) {
++		panic("[bc_pgfault] Error reading disk block: %e. Error: %e",
++		      blockno,
++		      result);
++	}
+ 
+ 	// Clear the dirty bit for the disk block page since we just read the
+ 	// block from disk
+@@ -80,7 +97,24 @@ flush_block(void *addr)
+ 		panic("flush_block of bad va %08x", addr);
+ 
+ 	// LAB 5: Your code here.
+-	panic("flush_block not implemented");
++	addr = ROUNDDOWN(addr, PGSIZE);
++
++	if (!va_is_mapped(addr) || !va_is_dirty(addr)) {
++		return;
++	}
++
++	int result = ide_write(blockno * BLKSECTS, addr, BLKSECTS);
++	if (result < 0) {
++		panic("[flush_block] Error writing to disk block: %e . Error "
++		      "%e",
++		      blockno,
++		      result);
++	}
++
++	result = sys_page_map(0, addr, 0, addr, uvpt[PGNUM(addr)] & PTE_SYSCALL);
++	if (result < 0) {
++		panic("[flush_block] Error calling sys_page_map: %e", result);
++	}
+ }
+ 
+ // Test that the block cache works, by smashing the superblock and
+diff --git a/fs/fs.c b/fs/fs.c
+index 875f451..6d9ebe9 100644
+--- a/fs/fs.c
++++ b/fs/fs.c
+@@ -62,7 +62,17 @@ alloc_block(void)
+ 	// super->s_nblocks blocks in the disk altogether.
+ 
+ 	// LAB 5: Your code here.
+-	panic("alloc_block not implemented");
++	uint32_t blockno = 0;
++
++	for (blockno = 0; blockno != super->s_nblocks * BLKBITSIZE; ++blockno) {
++		if (block_is_free(blockno)) {
++			if (blockno != 0) {
++				bitmap[blockno / 32] &= ~(1 << (blockno % 32));
++			}
++			flush_block(diskaddr(blockno));
++			return blockno;
++		}
++	}
+ 	return -E_NO_DISK;
+ }
+ 
+@@ -132,8 +142,31 @@ fs_init(void)
+ static int
+ file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool alloc)
+ {
+-	// LAB 5: Your code here.
+-	panic("file_block_walk not implemented");
++	int ret = 0;
++	if (filebno < NDIRECT) {
++		*ppdiskbno = &f->f_direct[filebno]; /*slot will be one of the f->f_direct[] entries*/
++		return 0;
++	} else if (filebno < NDIRECT + NINDIRECT) {
++		// Block must be found indirectly.
++		if (!f->f_indirect) { /* or an entry in the indirect block */
++			if (!alloc)
++				return -E_NOT_FOUND;
++
++			// Allocate indirect block.
++			f->f_indirect = alloc_block();
++			if (!f->f_indirect)
++				return -E_NO_DISK;
++
++			// Clear block.
++			memset(diskaddr(f->f_indirect), 0, BLKSIZE);
++		}
++
++		uint32_t *ind_blk = (uint32_t *) diskaddr(f->f_indirect);
++		*ppdiskbno = &ind_blk[filebno - NDIRECT];
++		return 0;
++	}
++
++	return -E_INVAL; /* -E_INVAL if filebno is out of range (it's >= NDIRECT + NINDIRECT) */
+ }
+ 
+ // Set *blk to the address in memory where the filebno'th
+@@ -148,7 +181,21 @@ int
+ file_get_block(struct File *f, uint32_t filebno, char **blk)
+ {
+ 	// LAB 5: Your code here.
+-	panic("file_get_block not implemented");
++	uint32_t *blkno;
++	int ret = file_block_walk(f, filebno, &blkno, 1);
++	if (ret)
++		return ret;
++
++	// Not exist yet.
++	if (!*blkno)
++		*blkno = alloc_block();
++
++	// Allocation failed.
++	if (!*blkno)
++		return -E_NO_DISK;
++
++	*blk = (char *) diskaddr(*blkno);
++	return 0;
+ }
+ 
+ // Try to find a file named "name" in dir.  If so, set *file to it.
+diff --git a/fs/serv.c b/fs/serv.c
+index f38153b..08d6002 100644
+--- a/fs/serv.c
++++ b/fs/serv.c
+@@ -222,6 +222,26 @@ serve_read(envid_t envid, union Fsipc *ipc)
+ 		        req->req_n);
+ 
+ 	// Lab 5: Your code here:
++	// serve_read needs to use the function 'openfile_lookup' to find the file.
++	// and then read the file by the function 'file_read'.
++	// Finally, the fd_offset is incremented as it matches.
++	int i;
++	struct OpenFile *open_file;
++	// openfile_lookup transforms a "file id" into an Openfile struct
++	if ((i = openfile_lookup(envid, req->req_fileid, &open_file)) < 0)
++		// We return < 0 on error.
++		return i;
++	if ((i = file_read(open_file->o_file,
++	                   ret->ret_buf,
++	                   req->req_n,
++	                   open_file->o_fd->fd_offset))) {
++		if (i > 0) {
++			// increase fd_offset
++			open_file->o_fd->fd_offset += i;
++		}
++		// We returns the number of bytes succesfully read.
++		return i;
++	}
+ 	return 0;
+ }
+ 
+@@ -240,7 +260,28 @@ serve_write(envid_t envid, struct Fsreq_write *req)
+ 		        req->req_n);
+ 
+ 	// LAB 5: Your code here.
+-	panic("serve_write not implemented");
++	// serve_write needs to use the function 'openfile_lookup' to find the file.
++	// and then write the file by the function 'file_write'.
++	// Finally, the fd_offset is incremented as it matches.
++	int i;
++	struct OpenFile *open_file;
++	// openfile_lookup transforms a "file id" into an Openfile struct
++	if ((i = openfile_lookup(envid, req->req_fileid, &open_file)) < 0)
++		// we return < 0 on error.
++		return i;
++	if (req->req_n > PGSIZE)
++		req->req_n = PGSIZE;
++	if ((i = file_write(open_file->o_file,
++	                    req->req_buf,
++	                    req->req_n,
++	                    open_file->o_fd->fd_offset))) {
++		if (i > 0) {
++			open_file->o_fd->fd_offset += i;
++		}
++		// we return the number of bytes written.
++		return i;
++	}
++	return 0;
+ }
+ 
+ // Stat ipc->stat.req_fileid.  Return the file's struct Stat to the
+diff --git a/kern/env.c b/kern/env.c
+index 42a4bdf..8310d84 100644
+--- a/kern/env.c
++++ b/kern/env.c
+@@ -463,6 +463,9 @@ env_create(uint8_t *binary, enum EnvType type)
+ 	// If this is the file server (type == ENV_TYPE_FS) give it I/O
+ 	// privileges.
+ 	// LAB 5: Your code here.
++	if (type == ENV_TYPE_FS) {
++		newEnv->env_tf.tf_eflags |= FL_IOPL_3;
++	}
+ }
+ 
+ //
+diff --git a/kern/syscall.c b/kern/syscall.c
+index a29c25d..662dac0 100644
+--- a/kern/syscall.c
++++ b/kern/syscall.c
+@@ -138,7 +138,24 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
+ 	// LAB 5: Your code here.
+ 	// Remember to check whether the user has supplied us with a good
+ 	// address!
+-	panic("sys_env_set_trapframe not implemented");
++	user_mem_assert(curenv, tf, sizeof(struct Trapframe), PTE_U | PTE_P);
++
++	struct Env *env;
++
++	int result = envid2env(envid, &env, 1);
++	if (result < 0) {
++		return result;
++	}
++
++	env->env_tf = *tf;
++	env->env_tf.tf_cs |= 3;
++	env->env_tf.tf_es |= 3;
++	env->env_tf.tf_ds |= 3;
++	env->env_tf.tf_ss |= 3;
++	env->env_tf.tf_eflags |= FL_IF;
++	env->env_tf.tf_eflags &= ~FL_IOPL_MASK;
++
++	return 0;
+ }
+ 
+ // Set the page fault upcall for 'envid' by modifying the corresponding struct
+@@ -491,6 +508,9 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
+ 		        (envid_t) a1, (uint32_t) a2, (void *) a3, (unsigned) a4);
+ 	case SYS_ipc_recv:
+ 		return (int32_t) sys_ipc_recv((void *) a1);
++	case SYS_env_set_trapframe:
++		return sys_env_set_trapframe((envid_t) a1,
++		                             (struct Trapframe *) a2);
+ 	default:
+ 		return -E_INVAL;
+ 	}
+diff --git a/kern/trap.c b/kern/trap.c
+index ce5845c..8ff6d9a 100644
+--- a/kern/trap.c
++++ b/kern/trap.c
+@@ -236,6 +236,17 @@ trap_dispatch(struct Trapframe *tf)
+ 	// Handle keyboard and serial interrupts.
+ 	// LAB 5: Your code here.
+ 
++	// we call serial_intr to handle trap IRQ_OFFSET+IRQ_SERIAL
++	if (tf->tf_trapno == IRQ_OFFSET + IRQ_SERIAL) {
++		serial_intr();
++		return;
++	}
++
++	// we call kbd_intr to handle trap IRQ_OFFSET+IRQ_KBD
++	if (tf->tf_trapno == IRQ_OFFSET + IRQ_KBD) {
++		kbd_intr();
++		return;
++	}
+ 
+ 	// Unexpected trap: The user process or the kernel has a bug.
+ 	print_trapframe(tf);
+diff --git a/kern/trapentry.S b/kern/trapentry.S
+index 8ee98cf..f8ed71d 100644
+--- a/kern/trapentry.S
++++ b/kern/trapentry.S
+@@ -53,6 +53,8 @@ TRAPHANDLER(trap_generalfault, T_GPFLT);
+ TRAPHANDLER(trap_pagefault, T_PGFLT);
+ TRAPHANDLER_NOEC(trap_syscall, T_SYSCALL);
+ TRAPHANDLER_NOEC(trap_irq, IRQ_OFFSET + IRQ_TIMER);
++TRAPHANDLER_NOEC(trap_kbd_intr, IRQ_OFFSET + IRQ_KBD);
++TRAPHANDLER_NOEC(trap_serial_intr, IRQ_OFFSET + IRQ_SERIAL);
+ 
+ /*
+  * Lab 3: Your code here for _alltraps
+diff --git a/lib/file.c b/lib/file.c
+index f2e0b45..e1e8a55 100644
+--- a/lib/file.c
++++ b/lib/file.c
+@@ -141,7 +141,16 @@ devfile_write(struct Fd *fd, const void *buf, size_t n)
+ 	// remember that write is always allowed to write *fewer*
+ 	// bytes than requested.
+ 	// LAB 5: Your code here
+-	panic("devfile_write not implemented");
++	uint32_t max_size = PGSIZE - (sizeof(int) + sizeof(size_t));
++
++	n = n > max_size ? max_size : n;
++
++	fsipcbuf.write.req_fileid = fd->fd_file.id;
++	fsipcbuf.write.req_n = n;
++
++	memmove(fsipcbuf.write.req_buf, buf, n);
++
++	return fsipc(FSREQ_WRITE, NULL);
+ }
+ 
+ static int
+diff --git a/lib/fork.c b/lib/fork.c
+index 89c791c..2de58c8 100644
+--- a/lib/fork.c
++++ b/lib/fork.c
+@@ -66,7 +66,12 @@ duppage(envid_t envid, unsigned pn)
+ 	// LAB 4: Your code here.
+ 	void *va = (void *) (pn * PGSIZE);
+ 	uint32_t perm = uvpt[pn] & PTE_SYSCALL;
+-	if (perm & PTE_W || perm & PTE_COW) {
++	if (perm & PTE_SHARE) {
++		r = sys_page_map(0, (void *) va, envid, (void *) va, perm);
++		if (r < 0) {
++			panic("duppage: sys_page_map failed for %x: %d\n", va, r);
++		}
++	} else if (perm & PTE_W || perm & PTE_COW) {
+ 		// Writable
+ 		// Mark COW in child
+ 		if ((r = sys_page_map(0,
+diff --git a/lib/ipc.c b/lib/ipc.c
+index d950545..740c3bc 100644
+--- a/lib/ipc.c
++++ b/lib/ipc.c
+@@ -56,6 +56,8 @@ void
+ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
+ {
+ 	// LAB 4: Your code here.
++	if (!pg)
++		pg = (void *) UTOP;
+ 	int return_value;
+ 	// We use a while cycle who call sys_ipc_try_send until the message has
+ 	// been delivered.
+@@ -66,7 +68,7 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
+ 	}
+ 	// It should panic() on any error other than -E_IPC_NOT_RECV.
+ 	if (return_value) {
+-		panic("return value of ipc_send is: %e", return_value);
++		panic("return value  of ipc_send is: %e", return_value);
+ 	}
+ }
+ 
+diff --git a/lib/spawn.c b/lib/spawn.c
+index 0858caf..64b986d 100644
+--- a/lib/spawn.c
++++ b/lib/spawn.c
+@@ -323,5 +323,34 @@ static int
+ copy_shared_pages(envid_t child)
+ {
+ 	// LAB 5: Your code here.
++	uintptr_t va;
++	int r;
++	for (va = 0; va < UTOP; va += PGSIZE) {
++		uint32_t pd_perm = uvpd[PDX(va)];
++
++		if (!(pd_perm & PTE_P)) {
++			continue;
++		}
++
++		uint32_t perm = uvpt[PGNUM(va)];
++
++		if (!(perm & PTE_P)) {
++			continue;
++		}
++
++		if (!(perm & PTE_SHARE)) {
++			continue;
++		}
++
++		r = sys_page_map(
++		        0, (void *) va, child, (void *) va, perm & PTE_SYSCALL);
++		if (r < 0) {
++			panic("copy_shared_pages: sys_page_map failed for %x: "
++			      "%d\n",
++			      va,
++			      r);
++		}
++	}
++
+ 	return 0;
+ }
+diff --git a/user/sh.c b/user/sh.c
+index 8ec285e..214e1ea 100644
+--- a/user/sh.c
++++ b/user/sh.c
+@@ -55,7 +55,16 @@ again:
+ 			// then close the original 'fd'.
+ 
+ 			// LAB 5: Your code here.
+-			panic("< redirection not implemented");
++			// similar to > redirection"...
++			if ((fd = open(t, O_RDONLY)) < 0) {
++				cprintf("open %s for read: %e", t, fd);
++				exit();
++			}
++			// The file t must be opened making sure that it ends in the descriptor 0
++			if (fd != 0) {
++				dup(fd, 0);
++				close(fd);
++			}
+ 			break;
+ 
+ 		case '>':  // Output redirection
