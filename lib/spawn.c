@@ -326,9 +326,20 @@ copy_shared_pages(envid_t child)
 	uintptr_t va;
 	int r;
 	for (va = 0; va < UTOP; va += PGSIZE) {
+
 		uint32_t pd_perm = uvpd[PDX(va)];
+
+		if(!(pd_perm & PTE_P)){
+            continue;
+		}
+
 		uint32_t perm = uvpt[PGNUM(va)];
-		if (!(pd_perm & PTE_P) || !(perm & PTE_P) || !(perm & PTE_SHARE)) {
+
+		if(!(perm & PTE_P)){
+            continue;
+		}
+
+		if (!(perm & PTE_SHARE)) {
 			continue;
 		}
 
